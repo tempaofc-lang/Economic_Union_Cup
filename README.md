@@ -8,6 +8,15 @@
 
 ---
 
+## 〇、仓库与协作入口
+
+- **仓库地址**：<https://github.com/tempaofc-lang/Economic_Union_Cup>（Private）
+- **加入方式**：把你的 GitHub 用户名发给组长 → 在 `Settings → Collaborators` 邀请 → 查收邮件点接受。
+- **克隆**：`git clone https://github.com/tempaofc-lang/Economic_Union_Cup.git`
+- **第一次上手**：先读 [docs/01_B组分工与学习路线.md](docs/01_B组分工与学习路线.md) 第 0 节。
+
+---
+
 ## 一、当前状态（2026-10-22）
 
 | 模块 | 状态 | 说明 |

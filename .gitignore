@@ -1,0 +1,49 @@
+# ---------------------------------------------------------------------------
+# 经济联盟杯 · 手语视界 —— Git 忽略清单
+# 原则：代码和文档进仓库，大文件和密钥不进仓库
+# ---------------------------------------------------------------------------
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+
+# 模型权重与数据集（体积大，用群文件 / 网盘共享，绝不进仓库）
+*.pt
+*.pth
+*.onnx
+*.engine
+*.tflite
+weights/
+datasets/
+runs/
+
+# 密钥与本地配置（API Key 只放在 .env，.env 已被忽略）
+.env
+.env.*
+!.env.example
+*.key
+secrets.json
+
+# 打包物与临时文件
+*.zip
+*.rar
+*.7z
+~$*
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 录屏素材与成片（原始素材太大，只提交最终 MP4 的网盘链接）
+demo/raw/
+*.mp4
+*.mov
+*.avi
+!demo/final/*.md

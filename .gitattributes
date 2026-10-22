@@ -1,0 +1,13 @@
+# 统一换行符，避免 Windows / macOS 混用产生无意义的整文件 diff
+* text=auto eol=lf
+
+# 明确二进制文件
+*.docx binary
+*.xlsx binary
+*.pptx binary
+*.pdf  binary
+*.jpg  binary
+*.jpeg binary
+*.png  binary
+*.pt   binary
+*.onnx binary

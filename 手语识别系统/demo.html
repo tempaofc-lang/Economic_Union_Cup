@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YOLO26 静态手语词识别智能体 - 方案A 政务服务定制版预览</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+            background-color: #F8FAFC;
+            margin: 0;
+            padding: 0;
+        }
+        .split-layout-a {
+            display: grid;
+            grid-template-columns: minmax(480px, 60%) minmax(340px, 40%);
+            gap: 16px;
+            align-items: start;
+        }
+        .left-video-pane-a {
+            height: 670px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+        .right-scroll-pane-a {
+            height: 670px;
+            overflow-y: auto;
+            padding-right: 6px;
+        }
+        .right-scroll-pane-a::-webkit-scrollbar { width: 6px; }
+        .right-scroll-pane-a::-webkit-scrollbar-track { background: #F1F5F9; border-radius: 999px; }
+        .right-scroll-pane-a::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 999px; }
+        .gr-btn-primary-a {
+            background: linear-gradient(180deg, #3B82F6 0%, #2563EB 100%);
+            color: #FFFFFF;
+            border: 1px solid #1D4ED8;
+        }
+        .gr-btn-primary-a:hover { background: #1D4ED8; }
+    </style>
+</head>
+<body class="min-h-screen bg-[#F8FAFC] text-slate-800">
+    <header class="sticky top-0 z-50 bg-white/95 backdrop-blur border-b border-slate-200 px-4 py-2.5 shadow-sm">
+        <div class="max-w-[1400px] mx-auto flex flex-wrap items-center justify-between gap-2">
+            <div class="flex items-center gap-2">
+                <span class="px-2.5 py-1 rounded-md bg-blue-700 text-white text-xs font-bold">已选定：方案A</span>
+                <span class="text-xs font-bold text-slate-900">政务服务无障碍导办专版 · 免环境双击即看预览</span>
+            </div>
+            <div class="flex flex-wrap items-center gap-3 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 text-xs">
+                <span class="font-bold text-blue-800">🔧 后期模块增删开关 (FEATURE_FLAGS)：</span>
+                <label class="inline-flex items-center gap-1 cursor-pointer">
+                    <input type="checkbox" checked onchange="toggleFeature('mod-vocab', this.checked)" class="accent-blue-600">
+                    <span>支持词库栏</span>
+                </label>
+                <label class="inline-flex items-center gap-1 cursor-pointer">
+                    <input type="checkbox" checked onchange="toggleFeature('mod-slider', this.checked)" class="accent-blue-600">
+                    <span>置信度阈值滑块</span>
+                </label>
+                <label class="inline-flex items-center gap-1 cursor-pointer">
+                    <input type="checkbox" checked onchange="toggleFeature('mod-autotts', this.checked)" class="accent-blue-600">
+                    <span>自动朗读/静音开关</span>
+                </label>
+                <label class="inline-flex items-center gap-1 cursor-pointer">
+                    <input type="checkbox" checked onchange="toggleFeature('mod-edit-btns', this.checked)" class="accent-blue-600">
+                    <span>撤回/确认成句</span>
+                </label>
+                <label class="inline-flex items-center gap-1 cursor-pointer">
+                    <input type="checkbox" checked onchange="toggleAiReply(this.checked)" class="accent-blue-600">
+                    <span>AI导办回答</span>
+                </label>
+                <label class="inline-flex items-center gap-1 cursor-pointer">
+                    <input type="checkbox" checked onchange="toggleFeature('mod-twoway', this.checked)" class="accent-blue-600">
+                    <span>双向回复区</span>
+                </label>
+                <label class="inline-flex items-center gap-1 cursor-pointer">
+                    <input type="checkbox" checked onchange="toggleFeature('mod-history', this.checked)" class="accent-blue-600">
+                    <span>历史记录面板</span>
+                </label>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-[1400px] mx-auto px-4 py-4">
+        <div class="rounded-[10px] px-6 py-4 text-white mb-2.5 shadow-md flex flex-wrap items-center justify-between gap-2"
+             style="background: linear-gradient(135deg, #1E3A8A 0%, #2563EB 100%);">
+            <div>
+                <h1 class="text-[22px] font-bold tracking-wide m-0 mb-1 text-white">
+                    YOLO26 静态手语词识别智能体 · 政务服务无障碍导办系统
+                </h1>
+                <p class="text-[13px] text-[#DBEAFE] m-0 opacity-95">
+                    系统链路：摄像头/本地视频输入 → YOLO26 手部检测与去重 → 静态手语词识别 → Agent 语义翻译与政务导办应答 → 自动语音播报/双向交互
+                </p>
+            </div>
+            <div class="flex items-center gap-2">
+                <span id="scene-badge" class="text-xs bg-white/20 px-3 py-1 rounded-full font-semibold border border-white/30">
+                    当前演示：政务场景一（身份证补办）
+                </span>
+                <button onclick="simulateFailure()" class="text-xs bg-rose-500 hover:bg-rose-600 text-white px-3 py-1 rounded-full font-bold border border-rose-300 shadow-sm transition cursor-pointer">
+                    ⚠️ 点此预览「识别失败」提示效果
+                </button>
+            </div>
+        </div>
+
+        <div id="status-bar-A" class="mb-2.5"></div>
+
+        <div id="mod-vocab" class="bg-white border border-slate-200 border-l-4 border-l-blue-600 rounded-lg px-3.5 py-2 mb-3 flex flex-wrap items-center gap-1.5 shadow-sm">
+            <span class="text-xs font-bold text-slate-800 mr-1">📖 当前支持政务手语词库 (16词)：</span>
+            <span id="vocab-badges" class="flex flex-wrap gap-1.5"></span>
+        </div>
+
+        <div class="split-layout-a">
+            <div class="left-video-pane-a bg-white border border-[#E2E8F0] rounded-[10px] p-4 shadow-sm">
+                <div class="flex-1 flex flex-col">
+                    <div class="grid grid-cols-12 gap-2.5 mb-3 pb-2.5 border-b border-slate-100 items-center">
+                        <div class="col-span-5">
+                            <div class="text-xs font-bold text-slate-700 mb-1">输入源切换</div>
+                            <div class="flex flex-wrap gap-1.5">
+                                <label class="inline-flex items-center gap-1 text-xs font-medium text-slate-800 bg-slate-50 px-2.5 py-1.5 rounded-md border border-slate-200 cursor-pointer">
+                                    <input type="radio" name="source-A" value="cam" checked onchange="switchSource('cam')" class="accent-blue-600">
+                                    <span>摄像头实时采集</span>
+                                </label>
+                                <label class="inline-flex items-center gap-1 text-xs font-medium text-slate-800 bg-slate-50 px-2.5 py-1.5 rounded-md border border-slate-200 cursor-pointer">
+                                    <input type="radio" name="source-A" value="file" onchange="switchSource('file')" class="accent-blue-600">
+                                    <span>本地视频上传</span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div id="mod-slider" class="col-span-4 bg-slate-50 px-2.5 py-1.5 rounded-md border border-slate-200">
+                            <div class="flex justify-between text-[11.5px] font-bold text-slate-700 mb-0.5">
+                                <span>置信度过滤阈值</span>
+                                <span id="thresh-val-label" class="text-blue-700 font-mono">0.75 (75%)</span>
+                            </div>
+                            <input id="conf-slider" type="range" min="0.50" max="0.95" step="0.05" value="0.75"
+                                   oninput="onThresholdChange(this.value)" class="w-full accent-blue-600 cursor-pointer h-1.5">
+                        </div>
+
+                        <div id="mod-autotts" class="col-span-3 bg-blue-50/70 px-2.5 py-1.5 rounded-md border border-blue-200">
+                            <div class="text-[11.5px] font-bold text-blue-900 mb-1 flex items-center justify-between">
+                                <span>识别后自动播报</span>
+                                <span id="tts-mode-tag" class="text-[10px] bg-blue-600 text-white px-1.5 py-0.2 rounded">朗读开启</span>
+                            </div>
+                            <div class="grid grid-cols-2 gap-1">
+                                <button id="btn-mode-speak" onclick="setAutoTtsMode(true)"
+                                        class="py-1 px-1.5 rounded text-[11px] font-bold bg-blue-600 text-white shadow-sm transition">
+                                    🔊 自动朗读
+                                </button>
+                                <button id="btn-mode-mute" onclick="setAutoTtsMode(false)"
+                                        class="py-1 px-1.5 rounded text-[11px] font-semibold bg-white text-slate-600 border border-slate-200 hover:bg-slate-100 transition">
+                                    🔇 静音模式
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="upload-drawer-A" class="hidden mb-2.5 p-2 bg-slate-50 rounded-md border border-dashed border-slate-300 text-center">
+                        <span class="text-xs text-slate-600 mr-2">上传本地手语视频 (MP4/AVI)：</span>
+                        <input type="file" accept="video/*" class="text-xs text-slate-600">
+                    </div>
+
+                    <div class="flex-1 flex flex-col mb-3">
+                        <div class="flex items-center justify-between mb-1.5">
+                            <span class="text-xs font-semibold text-slate-700">视频预览与 YOLO26 手部检测框展示（固定大画幅）</span>
+                            <span class="text-[11px] text-slate-400 font-mono">760 × 480 HD Preview</span>
+                        </div>
+                        <div class="flex-1 w-full rounded-[8px] overflow-hidden border border-slate-200 bg-[#F1F5F9] flex items-center justify-center">
+                            <canvas id="canvas-A" width="760" height="480" class="w-full h-[465px] object-cover block"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-5 gap-2 pt-1">
+                    <button onclick="start()" class="gr-btn-primary-a py-2.5 px-2 rounded-[6px] text-xs font-bold transition shadow-sm">
+                        ▶ 开始识别
+                    </button>
+                    <button onclick="simulateFailure()" class="bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 py-2.5 px-2 rounded-[6px] text-xs font-bold transition">
+                        ⚠️ 模拟识别失败
+                    </button>
+                    <button onclick="stop()" class="bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 py-2.5 px-2 rounded-[6px] text-xs font-semibold transition">
+                        ⏸ 停止识别
+                    </button>
+                    <button onclick="tts(false)" class="bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 py-2.5 px-2 rounded-[6px] text-xs font-semibold transition">
+                        🔊 手动朗读
+                    </button>
+                    <button onclick="clearAll()" class="bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 py-2.5 px-2 rounded-[6px] text-xs font-semibold transition">
+                        🗑 清空
+                    </button>
+                </div>
+            </div>
+
+            <div class="right-scroll-pane-a space-y-3.5">
+                <div class="bg-white border border-[#E2E8F0] border-l-[4px] border-l-[#2563EB] rounded-[10px] p-4 shadow-sm">
+                    <div class="flex items-center justify-between mb-2.5">
+                        <h4 class="text-xs font-bold text-slate-800 m-0">✋ 静态手语词识别结果与置信度</h4>
+                        <span class="text-[11px] text-blue-600 bg-blue-50 px-2 py-0.5 rounded font-medium">↕ 右栏支持独立滑动</span>
+                    </div>
+                    <div id="conf-bars-A" class="mb-2.5"></div>
+                    <div class="mb-2.5">
+                        <div class="text-[11px] text-slate-500 mb-1">识别词序列汇总</div>
+                        <input id="word-seq-A" type="text" readonly placeholder="等待输出静态手语词汇序列..."
+                               class="w-full rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-semibold text-slate-800 focus:outline-none">
+                    </div>
+                    <div id="mod-edit-btns" class="grid grid-cols-2 gap-2 pt-1">
+                        <button onclick="undoLastWord()" class="bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 py-1.5 px-2.5 rounded text-xs font-semibold transition">
+                            ⬅️ 撤回上一词
+                        </button>
+                        <button onclick="confirmSentence()" class="bg-blue-600 hover:bg-blue-700 text-white py-1.5 px-2.5 rounded text-xs font-bold transition shadow-sm">
+                            ✅ 确认成句 / 发送给 Agent
+                        </button>
+                    </div>
+                </div>
+
+                <div class="bg-white border border-[#E2E8F0] border-l-[4px] border-l-[#2563EB] rounded-[10px] p-4 shadow-sm">
+                    <h4 class="text-xs font-bold text-slate-800 m-0 mb-2.5">🤖 Agent 智能体语义解析输出</h4>
+                    <div id="large-agent-card"></div>
+
+                    <div id="mod-twoway" class="mt-3 pt-3 border-t border-slate-100">
+                        <div class="text-xs font-bold text-slate-700 mb-1.5">💬 双向交互：政务窗口工作人员回复（大字展示给听障群众）</div>
+                        <div class="flex gap-1.5 mb-2">
+                            <input id="staff-input" type="text" placeholder="输入窗口回复，或点击下方快捷回复..."
+                                   class="flex-1 rounded border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs text-slate-800 focus:outline-none">
+                            <button onclick="sendStaffReply()" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-xs font-bold transition">
+                                📤 发送回复
+                            </button>
+                        </div>
+                        <div class="flex flex-wrap gap-1.5">
+                            <button onclick="quickReply('请出示您的身份证或户口本原件，谢谢！')" class="bg-slate-100 hover:bg-slate-200 text-slate-700 px-2.5 py-1 rounded text-[11px] font-medium transition">
+                                快捷1：请出示身份证
+                            </button>
+                            <button onclick="quickReply('请先到右侧 2 号人像采集室免费拍照，随后回本窗口办理。')" class="bg-slate-100 hover:bg-slate-200 text-slate-700 px-2.5 py-1 rounded text-[11px] font-medium transition">
+                                快捷2：去2号室拍照
+                            </button>
+                            <button onclick="quickReply('您的业务已办结，请收好身份证与受理回执单！')" class="bg-slate-100 hover:bg-slate-200 text-slate-700 px-2.5 py-1 rounded text-[11px] font-medium transition">
+                                快捷3：已办结收好回执
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="mod-history" class="bg-white border border-[#E2E8F0] border-l-[4px] border-l-[#2563EB] rounded-[10px] p-4 shadow-sm">
+                    <div class="flex items-center justify-between mb-2">
+                        <h4 class="text-xs font-bold text-slate-800 m-0">📜 历史翻译记录</h4>
+                        <div class="flex gap-1.5">
+                            <button onclick="deleteLastHistory()" class="bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 px-2 py-1 rounded text-[11px] font-semibold">
+                                🗑 删除最新一条
+                            </button>
+                            <button onclick="clearAllHistory()" class="bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 px-2 py-1 rounded text-[11px] font-semibold">
+                                🧹 清空历史
+                            </button>
+                        </div>
+                    </div>
+                    <div id="history-list-A"></div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        const GOV_WORDS = [
+            "你好", "请问", "身份证", "丢失", "补办", "社保卡", "医保", "激活",
+            "窗口", "哪里", "营业执照", "办理", "需要", "什么", "材料", "谢谢"
+        ];
+
+        const MOCK_SCENES = [
+            {
+                scene_name: "政务场景一：身份证挂失与补办咨询",
+                tokens: [
+                    { word: "你好", conf: 0.98, bbox: [190, 100, 390, 330] },
+                    { word: "身份证", conf: 0.96, bbox: [205, 110, 405, 340] },
+                    { word: "丢失", conf: 0.89, bbox: [195, 105, 400, 335] },
+                    { word: "补办", conf: 0.95, bbox: [200, 112, 415, 345] },
+                    { word: "误触动作(低置信度)", conf: 0.62, bbox: [210, 115, 410, 340] }
+                ],
+                translation: "工作人员您好，我的身份证丢失了，请问怎么办理补办？",
+                ai_answer: "【政务导办回答】您好！补办身份证请携带户口本或驾驶证原件，先到右侧 2 号人像采集室免费拍照，随后前往 3 号户政窗口办理，工本费 40 元。"
+            },
+            {
+                scene_name: "政务场景二：社保卡激活与医保窗口问询",
+                tokens: [
+                    { word: "请问", conf: 0.97, bbox: [195, 105, 400, 335] },
+                    { word: "社保卡", conf: 0.95, bbox: [210, 115, 410, 345] },
+                    { word: "医保", conf: 0.96, bbox: [185, 100, 400, 340] },
+                    { word: "窗口", conf: 0.91, bbox: [200, 110, 415, 345] },
+                    { word: "哪里", conf: 0.98, bbox: [205, 105, 420, 350] }
+                ],
+                translation: "请问社保卡激活和医保查询业务在哪个窗口办理？",
+                ai_answer: "【政务导办回答】请前往大厅东侧 B 区 6～8 号「社保医保综合窗口」，无需预约，凭身份证在自助取号机取号即可办理。"
+            },
+            {
+                scene_name: "政务场景三：个体工商户营业执照材料咨询",
+                tokens: [
+                    { word: "办理", conf: 0.96, bbox: [200, 105, 410, 335] },
+                    { word: "营业执照", conf: 0.94, bbox: [190, 110, 405, 345] },
+                    { word: "需要", conf: 0.97, bbox: [205, 105, 420, 340] },
+                    { word: "什么", conf: 0.88, bbox: [195, 110, 410, 345] },
+                    { word: "材料", conf: 0.98, bbox: [185, 100, 410, 350] }
+                ],
+                translation: "我想办理个体工商户营业执照，请问需要准备什么材料？",
+                ai_answer: "【政务导办回答】请准备：① 经营者身份证原件；② 经营场所租赁合同或产权证明。材料齐全可在 1 号商事登记窗口当场拿证。"
+            }
+        ];
+
+        let sceneIdx = 0;
+        let currentScene = MOCK_SCENES[0];
+        let currentTokens = [];
+        let confThreshold = 0.75;
+        let showAiAnswer = true;
+        let autoTtsEnabled = true;
+        let isFailedState = false;
+        let currentStaffReply = "";
+        let currentTtsText = "";
+        let nextRecordId = 1;
+        let historyRecords = [];
+
+        function nowTime() {
+            return new Date().toTimeString().split(' ')[0];
+        }
+
+        function initVocabBar() {
+            const box = document.getElementById('vocab-badges');
+            box.innerHTML = GOV_WORDS.map(w =>
+                `<span class="bg-blue-50 text-blue-800 border border-blue-200 px-2 py-0.5 rounded-full text-[11.5px] font-semibold">${w}</span>`
+            ).join('');
+        }
+
+        function setAutoTtsMode(enabled) {
+            autoTtsEnabled = enabled;
+            const btnSpeak = document.getElementById('btn-mode-speak');
+            const btnMute = document.getElementById('btn-mode-mute');
+            const modeTag = document.getElementById('tts-mode-tag');
+
+            if (enabled) {
+                btnSpeak.className = "py-1 px-1.5 rounded text-[11px] font-bold bg-blue-600 text-white shadow-sm transition";
+                btnMute.className = "py-1 px-1.5 rounded text-[11px] font-semibold bg-white text-slate-600 border border-slate-200 hover:bg-slate-100 transition";
+                modeTag.textContent = "朗读开启";
+                modeTag.className = "text-[10px] bg-blue-600 text-white px-1.5 py-0.2 rounded";
+                renderStatusA("idle", "已开启【🔊 自动语音播报】：每次手语识别或确认成句后将自动朗读中文译文");
+            } else {
+                if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+                btnMute.className = "py-1 px-1.5 rounded text-[11px] font-bold bg-slate-700 text-white shadow-sm transition";
+                btnSpeak.className = "py-1 px-1.5 rounded text-[11px] font-semibold bg-white text-slate-600 border border-slate-200 hover:bg-slate-100 transition";
+                modeTag.textContent = "已静音";
+                modeTag.className = "text-[10px] bg-slate-500 text-white px-1.5 py-0.2 rounded";
+                renderStatusA("paused", "已切换至【🔇 静音模式】：识别完成后仅展示大字翻译，不自动发声播报");
+            }
+        }
+
+        function drawFrameA(modeText = "摄像头实时采集待命", state = "standby", tokenInfo = null) {
+            const canvas = document.getElementById('canvas-A');
+            const ctx = canvas.getContext('2d');
+            const w = canvas.width, h = canvas.height;
+
+            ctx.fillStyle = "rgb(241, 245, 249)";
+            ctx.fillRect(0, 0, w, h);
+            ctx.strokeStyle = "rgb(226, 232, 240)";
+            ctx.lineWidth = 1;
+            for (let x = 0; x < w; x += 95) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
+            for (let y = 0; y < h; y += 95) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
+
+            ctx.fillStyle = "rgb(203, 213, 225)";
+            ctx.beginPath(); ctx.arc(380, 195, 64, 0, Math.PI * 2); ctx.fill();
+            ctx.beginPath(); ctx.ellipse(380, 425, 150, 120, 0, Math.PI, Math.PI * 2); ctx.fill();
+
+            ctx.fillStyle = state === "failed" ? "rgb(190, 18, 60)" : "rgb(30, 64, 175)";
+            ctx.fillRect(0, 0, w, 40);
+            ctx.fillStyle = "#FFFFFF";
+            ctx.font = "600 13.5px sans-serif";
+            const ttsLabel = autoTtsEnabled ? "🔊自动朗读:开" : "🔇静音模式";
+            ctx.fillText(`YOLO26 GOV-SERVICE SIGN AGENT  |  ${modeText}  (阈值>=${confThreshold.toFixed(2)} | ${ttsLabel})`, 16, 25);
+
+            if (state === "active" && tokenInfo) {
+                const [x1, y1, x2, y2] = tokenInfo.bbox;
+                const sx1 = x1 + 35, sy1 = y1 + 15, sx2 = x2 + 55, sy2 = y2 + 35;
+                ctx.strokeStyle = "rgb(37, 99, 235)";
+                ctx.lineWidth = 2.5;
+                ctx.strokeRect(sx1, sy1, sx2 - sx1, sy2 - sy1);
+
+                ctx.fillStyle = "rgb(37, 99, 235)";
+                ctx.fillRect(sx1, sy1 - 28, 260, 28);
+                ctx.fillStyle = "#FFFFFF";
+                ctx.font = "bold 12.5px sans-serif";
+                ctx.fillText(`Hand ROI | Conf: ${tokenInfo.conf.toFixed(2)} [防抖已激活]`, sx1 + 8, sy1 - 9);
+
+                const pts = [[305, 265], [328, 215], [355, 205], [382, 215], [405, 248], [355, 305]];
+                ctx.strokeStyle = "rgb(59, 130, 246)";
+                ctx.lineWidth = 2.2;
+                for (let i = 0; i < pts.length - 1; i++) {
+                    ctx.beginPath(); ctx.moveTo(pts[i][0], pts[i][1]); ctx.lineTo(pts[5][0], pts[5][1]); ctx.stroke();
+                    ctx.fillStyle = "rgb(30, 64, 175)";
+                    ctx.beginPath(); ctx.arc(pts[i][0], pts[i][1], 5.5, 0, Math.PI * 2); ctx.fill();
+                }
+            } else if (state === "failed") {
+                const sx1 = 225, sy1 = 125, sx2 = 515, sy2 = 365;
+                ctx.setLineDash([8, 6]);
+                ctx.strokeStyle = "rgb(225, 29, 72)";
+                ctx.lineWidth = 3;
+                ctx.strokeRect(sx1, sy1, sx2 - sx1, sy2 - sy1);
+                ctx.setLineDash([]);
+
+                ctx.fillStyle = "rgb(225, 29, 72)";
+                ctx.fillRect(sx1, sy1 - 30, 325, 30);
+                ctx.fillStyle = "#FFFFFF";
+                ctx.font = "bold 12.5px sans-serif";
+                ctx.fillText(`⚠️ 识别失败 | 最高置信度 0.41 < 阈值 ${confThreshold.toFixed(2)}`, sx1 + 10, sy1 - 10);
+
+                ctx.fillStyle = "rgba(255, 241, 242, 0.94)";
+                ctx.fillRect(135, 395, 490, 52);
+                ctx.strokeStyle = "rgb(251, 113, 133)";
+                ctx.lineWidth = 1.5;
+                ctx.strokeRect(135, 395, 490, 52);
+                ctx.fillStyle = "rgb(159, 18, 57)";
+                ctx.font = "bold 13.5px sans-serif";
+                ctx.fillText("❌ 未能识别有效手语动作：手部偏离采集区或动作模糊，请重新比划", 155, 426);
+            } else {
+                ctx.fillStyle = "rgb(100, 116, 139)";
+                ctx.font = "15px sans-serif";
+                ctx.fillText("待命状态：点击下方 [▶ 开始识别] 启动政务手语导办演示", 180, 255);
+            }
+        }
+
+        function renderStatusA(state = "idle", message = "系统空闲") {
+            const palette = {
+                idle: ["#64748B", "#F1F5F9", "#E2E8F0", "待命状态"],
+                running: ["#10B981", "#ECFDF5", "#A7F3D0", "识别成功"],
+                paused: ["#F59E0B", "#FFFBEB", "#FDE68A", "已暂停"],
+                tts: ["#2563EB", "#EFF6FF", "#BFDBFE", "语音朗读中"],
+                error: ["#E11D48", "#FFF1F2", "#FECDD3", "识别失败提示"]
+            };
+            const [dot, bg, border, label] = palette[state] || palette.idle;
+            const ttsStatusText = autoTtsEnabled ? "🔊 自动播报: 开启" : "🔇 自动播报: 静音";
+            document.getElementById('status-bar-A').innerHTML = `
+                <div style="display:flex;align-items:center;justify-content:space-between;background:${bg};
+                            border:1px solid ${border};border-radius:8px;padding:8px 14px;font-size:13px;color:#1E293B;">
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${dot};box-shadow:0 0 0 4px ${dot}28;"></span>
+                        <strong style="color:${state === 'error' ? '#9F1239' : '#0F172A'};">[${label}]</strong>
+                        <span style="color:${state === 'error' ? '#BE123C' : '#1E293B'};font-weight:${state === 'error' ? '600' : '400'};">${message}</span>
+                    </div>
+                    <span class="text-xs font-semibold text-blue-800 bg-white px-2.5 py-0.5 rounded border border-blue-200">
+                        ${ttsStatusText}
+                    </span>
+                </div>
+            `;
+        }
+
+        function renderConfBars(tokens, filteredCount = 0, failedReason = "") {
+            const el = document.getElementById('conf-bars-A');
+            if (failedReason) {
+                el.innerHTML = `
+                    <div class="p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-900 space-y-1.5">
+                        <div class="font-bold text-rose-700 text-[13px] flex items-center gap-1.5">
+                            <span>⚠️ 手语词识别失败（有效检出词数：0）</span>
+                        </div>
+                        <p class="text-rose-800 leading-relaxed m-0">${failedReason}</p>
+                        <div class="text-[11px] text-rose-600 bg-white/80 px-2.5 py-1 rounded border border-rose-100">
+                            💡 建议操作：① 请正对摄像头并将双手保持在画面中央；② 适当调低左侧「置信度过滤阈值」滑块；③ 点击【▶ 开始识别】重试。
+                        </div>
+                    </div>
+                `;
+                return;
+            }
+            if (!tokens || tokens.length === 0) {
+                el.innerHTML = `<div class="p-3 text-center text-slate-400 text-xs bg-slate-50 rounded border border-dashed border-slate-200">等待开始识别后展示政务手语词及分类置信度...</div>`;
+                return;
+            }
+            let html = tokens.map((item, idx) => `
+                <div class="mb-1.5">
+                    <div class="flex justify-between text-xs mb-0.5">
+                        <span class="font-bold text-slate-800">#${idx + 1} 静态手语词：「${item.word}」</span>
+                        <span class="font-mono font-semibold text-blue-700">${Math.round(item.conf * 100)}% (${item.conf.toFixed(2)}) ✓通过阈值</span>
+                    </div>
+                    <div class="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                        <div style="width:${Math.round(item.conf * 100)}%" class="h-full bg-blue-600 rounded-full"></div>
+                    </div>
+                </div>
+            `).join('');
+
+            if (filteredCount > 0) {
+                html += `
+                    <div class="text-[11.5px] text-amber-800 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded mt-1.5">
+                        🛡️ 置信度阈值过滤：已自动拦截 <strong>${filteredCount}</strong> 个低于 ${confThreshold.toFixed(2)} 的疑似误触动作
+                    </div>
+                `;
+            }
+            el.innerHTML = html;
+        }
+
+        function renderLargeTranslation(translation, aiAnswer, staffReply = "", isFailed = false) {
+            const el = document.getElementById('large-agent-card');
+            if (isFailed) {
+                el.innerHTML = `
+                    <div class="bg-rose-50/70 border border-rose-200 rounded-lg p-3.5">
+                        <div class="text-xs font-bold text-rose-700 mb-1.5">
+                            ⚠️ 识别未成功 · 温馨提示（大字展示给听障办事群众）：
+                        </div>
+                        <div class="text-[19px] font-extrabold text-rose-900 bg-white p-3 rounded border-l-4 border-l-rose-600 shadow-sm leading-snug">
+                            抱歉，刚才未能看清您的手语动作。请您将双手放在画面框内、放慢动作重新比划一次，好吗？
+                        </div>
+                        <div class="mt-2 text-xs text-rose-800 bg-rose-100/70 px-3 py-1.5 rounded font-medium">
+                            🤖 政务导办辅助建议：若多次识别失败，您也可以直接指认顶部「16个政务高频词库」或通过下方窗口文字屏直接沟通。
+                        </div>
+                    </div>
+                `;
+                return;
+            }
+            if (!translation) {
+                el.innerHTML = `<div class="p-4 text-center text-slate-400 text-xs bg-slate-50 rounded border border-dashed border-slate-200">等待 Agent 智能体输出大字号中文译文与政务导办回答...</div>`;
+                return;
+            }
+            const aiHtml = (showAiAnswer && aiAnswer) ? `
+                <div class="mt-2.5 bg-blue-50 border border-blue-200 rounded-lg p-2.5">
+                    <div class="text-[11.5px] font-bold text-blue-800 mb-1">🤖 政务 AI 智能体导办回答：</div>
+                    <div class="text-sm font-semibold text-blue-950 leading-relaxed">${aiAnswer}</div>
+                </div>
+            ` : '';
+
+            const staffHtml = staffReply ? `
+                <div class="mt-2.5 bg-emerald-50 border border-emerald-200 rounded-lg p-2.5">
+                    <div class="text-[11.5px] font-bold text-emerald-800 mb-1">💬 窗口工作人员双向回复（大字展示给听障办事群众）：</div>
+                    <div class="text-base font-extrabold text-emerald-900">“${staffReply}”</div>
+                </div>
+            ` : '';
+
+            el.innerHTML = `
+                <div class="bg-slate-50 border border-slate-200 rounded-lg p-3">
+                    <div class="text-[11.5px] font-bold text-slate-500 mb-1">🗣️ 手语原意中文翻译（20px 大字号高清展示）：</div>
+                    <div class="text-[20px] font-extrabold text-slate-900 bg-white p-3 rounded border-l-4 border-l-blue-600 shadow-sm leading-snug">
+                        ${translation}
+                    </div>
+                    ${aiHtml}
+                    ${staffHtml}
+                </div>
+            `;
+        }
+
+        function renderHistory() {
+            const el = document.getElementById('history-list-A');
+            if (historyRecords.length === 0) {
+                el.innerHTML = `<div class="p-3 text-center text-slate-400 text-xs bg-slate-50 rounded border border-dashed border-slate-200">暂无历史翻译记录</div>`;
+                return;
+            }
+            el.innerHTML = `<div class="max-h-[150px] overflow-y-auto space-y-1.5 pr-1">` +
+                historyRecords.slice().reverse().map(r => `
+                    <div class="bg-slate-50 border border-slate-200 rounded p-2 text-xs">
+                        <div class="flex justify-between text-slate-500 text-[11px] mb-0.5">
+                            <span><strong>#${r.id} [${r.type}]</strong> | 词序列：${r.words}</span>
+                            <span class="font-mono">${r.time}</span>
+                        </div>
+                        <div class="font-bold text-slate-900">${r.translation}</div>
+                        <div class="text-blue-700 text-[11.5px] mt-0.5">${r.reply}</div>
+                    </div>
+                `).join('') + `</div>`;
+        }
+
+        function addHistory(type, words, translation, reply) {
+            historyRecords.push({
+                id: nextRecordId++,
+                time: nowTime(),
+                type,
+                words,
+                translation,
+                reply
+            });
+            renderHistory();
+        }
+
+        function start() {
+            isFailedState = false;
+            currentScene = MOCK_SCENES[sceneIdx % MOCK_SCENES.length];
+            sceneIdx++;
+            currentStaffReply = "";
+            document.getElementById('scene-badge').textContent = `当前演示：${currentScene.scene_name}`;
+
+            const allTokens = currentScene.tokens;
+            currentTokens = allTokens.filter(t => t.conf >= confThreshold);
+            const filteredCount = allTokens.length - currentTokens.length;
+
+            if (currentTokens.length === 0) {
+                simulateFailure(`当前场景所有手势置信度均低于设定阈值 ${confThreshold.toFixed(2)}，已全部被防抖机制拦截。`);
+                return;
+            }
+
+            drawFrameA("ACTIVE | 政务手语实时识别", "active", currentTokens[currentTokens.length - 1]);
+            renderConfBars(currentTokens, filteredCount);
+            document.getElementById('word-seq-A').value = currentTokens.map(t => `${t.word} (${t.conf.toFixed(2)})`).join(" → ");
+
+            currentTtsText = showAiAnswer ? `${currentScene.translation} ${currentScene.ai_answer}` : currentScene.translation;
+            renderLargeTranslation(currentScene.translation, currentScene.ai_answer, "", false);
+            addHistory("手语导办", currentTokens.map(t => t.word).join(" → "), currentScene.translation, currentScene.ai_answer);
+
+            if (autoTtsEnabled) {
+                tts(true);
+                renderStatusA("running", `已完成【${currentScene.scene_name}】识别，并自动语音播报译文与导办回答`);
+            } else {
+                renderStatusA("running", `已完成【${currentScene.scene_name}】识别（当前为🔇静音模式，未自动语音播报）`);
+            }
+        }
+
+        function simulateFailure(customReason = "") {
+            isFailedState = true;
+            currentTokens = [];
+            document.getElementById('scene-badge').textContent = "当前演示：⚠️ 识别失败/低置信度异常捕获";
+
+            const reason = customReason || `检测到手部动作置信度过低（最高仅 0.41，低于过滤阈值 ${confThreshold.toFixed(2)}），或手部偏离采集区域、动作模糊，未能匹配有效政务手语词。`;
+            drawFrameA("WARNING | 识别失败请重试", "failed", null);
+            renderConfBars([], 0, reason);
+            document.getElementById('word-seq-A').value = "⚠️ 识别失败：未检出有效手语词序列（请重新比划）";
+            renderLargeTranslation("", "", "", true);
+
+            currentTtsText = "抱歉，未能看清您的手语动作，请您放慢动作重新比划一次。";
+            if (autoTtsEnabled) {
+                tts(true);
+                renderStatusA("error", "识别失败：未检测到达到置信度阈值的有效手语词，已自动播报重试提示！");
+            } else {
+                renderStatusA("error", "识别失败：手部动作模糊或置信度低于阈值，请正对摄像头重新打手语（当前为静音模式）");
+            }
+        }
+
+        function undoLastWord() {
+            if (currentTokens.length === 0) {
+                renderStatusA("paused", "当前词序列已为空，无可撤回词汇");
+                return;
+            }
+            const removed = currentTokens.pop();
+            if (currentTokens.length === 0) {
+                simulateFailure(`您已撤回最后一个识别词「${removed.word}」，当前有效手语词序列为空，请重新采集识别。`);
+                return;
+            }
+            renderConfBars(currentTokens, 0);
+            document.getElementById('word-seq-A').value = currentTokens.map(t => `${t.word} (${t.conf.toFixed(2)})`).join(" → ");
+            renderStatusA("paused", `已撤回识别词「${removed.word}」，可点击【✅ 确认成句】重新生成翻译`);
+        }
+
+        function confirmSentence() {
+            if (currentTokens.length === 0) {
+                simulateFailure("当前尚未识别到任何有效手语词，无法合成语句，请先正对摄像头进行手语识别。");
+                return;
+            }
+            const wordsStr = currentTokens.map(t => t.word).join("、");
+            const trans = `您好，我想办理关于「${wordsStr}」的政务业务。`;
+            const reply = `【政务导办回答】已根据您确认的词汇（${wordsStr}）重新生成指引：请携带有效身份证件前往综合服务窗口办理。`;
+            currentTtsText = showAiAnswer ? `${trans} ${reply}` : trans;
+            renderLargeTranslation(trans, reply, currentStaffReply, false);
+            addHistory("手动确认成句", currentTokens.map(t => t.word).join(" → "), trans, reply);
+
+            if (autoTtsEnabled) {
+                tts(true);
+                renderStatusA("running", `已手动确认 ${currentTokens.length} 个手语词，Agent 已重新生成译文并自动朗读`);
+            } else {
+                renderStatusA("running", `已手动确认 ${currentTokens.length} 个手语词，Agent 已重新生成译文（🔇静音模式）`);
+            }
+        }
+
+        function sendStaffReply() {
+            const val = document.getElementById('staff-input').value.trim();
+            if (!val) {
+                renderStatusA("paused", "请输入或选择一条工作人员回复内容");
+                return;
+            }
+            isFailedState = false;
+            currentStaffReply = val;
+            const trans = currentTokens.length > 0 ? currentScene.translation : "（窗口双向文字屏对话已激活）";
+            const aiAns = currentTokens.length > 0 ? currentScene.ai_answer : "";
+            renderLargeTranslation(trans, aiAns, currentStaffReply, false);
+            addHistory("窗口双向回复", "工作人员输入", trans, `【工作人员回复】${currentStaffReply}`);
+            renderStatusA("running", `已向听障办事群众大字展示窗口回复：「${currentStaffReply}」`);
+        }
+
+        function quickReply(text) {
+            document.getElementById('staff-input').value = text;
+            sendStaffReply();
+        }
+
+        function deleteLastHistory() {
+            if (historyRecords.length > 0) {
+                const r = historyRecords.pop();
+                renderHistory();
+                renderStatusA("idle", `已删除第 #${r.id} 条历史翻译记录`);
+            } else {
+                renderStatusA("paused", "当前历史记录已为空");
+            }
+        }
+
+        function clearAllHistory() {
+            historyRecords = [];
+            renderHistory();
+            renderStatusA("idle", "已清空全部历史翻译与交互记录");
+        }
+
+        function onThresholdChange(val) {
+            confThreshold = parseFloat(val);
+            document.getElementById('thresh-val-label').textContent = `${confThreshold.toFixed(2)} (${Math.round(confThreshold * 100)}%)`;
+            if (currentTokens.length > 0) {
+                const allTokens = currentScene.tokens;
+                currentTokens = allTokens.filter(t => t.conf >= confThreshold);
+                renderConfBars(currentTokens, allTokens.length - currentTokens.length);
+                document.getElementById('word-seq-A').value = currentTokens.map(t => `${t.word} (${t.conf.toFixed(2)})`).join(" → ");
+            }
+        }
+
+        function stop() {
+            if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+            renderStatusA("paused", "视频帧采集与 YOLO26 推理进程已暂停，当前结果已保留");
+        }
+
+        function tts(isAuto = false) {
+            if (!currentTtsText) {
+                renderStatusA("paused", "当前尚无翻译文本可供语音朗读，请先点击【▶ 开始识别】");
+                return;
+            }
+            if (!isAuto) {
+                renderStatusA("tts", `正在通过浏览器语音引擎手动朗读：「${currentTtsText.slice(0, 20)}...」`);
+            }
+            if ('speechSynthesis' in window) {
+                window.speechSynthesis.cancel();
+                const utter = new SpeechSynthesisUtterance(currentTtsText);
+                utter.lang = 'zh-CN';
+                window.speechSynthesis.speak(utter);
+            }
+        }
+
+        function clearAll() {
+            if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+            isFailedState = false;
+            currentTokens = [];
+            currentTtsText = "";
+            drawFrameA("摄像头实时采集待命", "standby", null);
+            renderConfBars([], 0);
+            document.getElementById('word-seq-A').value = "";
+            renderLargeTranslation("", "", "", false);
+            renderStatusA("idle", "已清空当前面板识别结果");
+        }
+
+        function switchSource(mode) {
+            const isFile = mode === 'file';
+            document.getElementById('upload-drawer-A').classList.toggle('hidden', !isFile);
+            drawFrameA(isFile ? "本地视频回放模式" : "摄像头实时采集待命", "standby", null);
+        }
+
+        function toggleFeature(id, show) {
+            const el = document.getElementById(id);
+            if (el) el.classList.toggle('hidden', !show);
+        }
+
+        function toggleAiReply(show) {
+            showAiAnswer = show;
+            if (currentTokens.length > 0 && !isFailedState) {
+                renderLargeTranslation(currentScene.translation, currentScene.ai_answer, currentStaffReply, false);
+            }
+        }
+
+        window.onload = function () {
+            initVocabBar();
+            start();
+        };
+    </script>
+</body>
+</html>

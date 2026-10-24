@@ -52,6 +52,31 @@ except ImportError:
     external_agent = None
     HAS_EXTERNAL_AGENT = False
 
+# ------------------------------------------------------------------------------
+# 拼音展示层：YOLO 输出的是无声调拼音，界面上要显示中文
+# ------------------------------------------------------------------------------
+try:
+    from pinyin_codec import display_word as _display_word, load_vocab as _load_vocab
+    HAS_PINYIN_CODEC = True
+except Exception:
+    def _display_word(word):
+        return str(word)
+
+    def _load_vocab():
+        return None
+
+    HAS_PINYIN_CODEC = False
+
+
+def _display_seq(word_list):
+    """把 ["nihao","shenfenzheng"] 显示成 "你好 → 身份证"。"""
+    return " → ".join(_display_word(w) for w in word_list)
+
+
+def _display_token_seq(tokens):
+    """把 [{"word":"nihao","conf":0.96}, ...] 显示成 "你好 (0.96) → 身份证 (0.94)"。"""
+    return " → ".join(f"{_display_word(t['word'])} ({t['conf']:.2f})" for t in tokens)
+
 # 全局运行时状态（用于支持撤回上一词、手动确认成句、历史记录管理）
 _CURRENT_TOKENS = []
 _CURRENT_SCENE = {
@@ -201,16 +226,45 @@ def build_status_pill_a(state="idle", message="系统空闲：等待启动指令
 
 
 def build_vocab_bar_html():
-    badges = "".join([
-        f"<span style='background:#EFF6FF;color:#1E40AF;border:1px solid #BFDBFE;"
-        f"padding:2px 9px;border-radius:999px;font-size:12px;font-weight:600;'>{w}</span>"
-        for w in GOV_SUPPORTED_WORDS
-    ])
+    """
+    词库提示栏。
+    YOLO 输出的类别名是拼音，这里展示成「中文 + 小字拼音」，
+    既方便群众看懂，也让评委看到模型实际输出的是什么。
+    """
+    vocab = _load_vocab() if HAS_PINYIN_CODEC else None
+
+    if vocab:
+        chips = []
+        for entry in vocab["entries"]:
+            if entry["hanzi"] == vocab["confirm_hanzi"]:
+                continue
+            chips.append(
+                f"<span style='background:#EFF6FF;color:#1E40AF;border:1px solid #BFDBFE;"
+                f"padding:2px 9px;border-radius:999px;font-size:12px;font-weight:600;'>"
+                f"{entry['hanzi']}"
+                f"<span style='font-family:monospace;font-size:10.5px;color:#60A5FA;"
+                f"font-weight:400;margin-left:4px;'>{entry['pinyin']}</span></span>"
+            )
+        confirm_chip = (
+            f"<span style='background:#FEF3C7;color:#B45309;border:1px solid #FDE68A;"
+            f"padding:2px 9px;border-radius:999px;font-size:12px;font-weight:600;'>"
+            f"✋ {vocab['confirm_hanzi']}（确认手势）</span>"
+        )
+        badges = "".join(chips) + confirm_chip
+        count = len(vocab["entries"]) - 1
+    else:
+        badges = "".join([
+            f"<span style='background:#EFF6FF;color:#1E40AF;border:1px solid #BFDBFE;"
+            f"padding:2px 9px;border-radius:999px;font-size:12px;font-weight:600;'>{w}</span>"
+            for w in GOV_SUPPORTED_WORDS
+        ])
+        count = len(GOV_SUPPORTED_WORDS)
+
     return f"""
     <div style="background:#FFFFFF;border:1px solid #E2E8F0;border-left:4px solid #3B82F6;
                 border-radius:8px;padding:8px 14px;display:flex;align-items:center;flex-wrap:wrap;gap:6px;">
         <span style="font-size:12.5px;font-weight:700;color:#1E293B;margin-right:4px;">
-            📖 当前支持政务高频手语词库 ({len(GOV_SUPPORTED_WORDS)}词)：
+            📖 当前支持政务高频手语词库 ({count}词)：
         </span>
         {badges}
     </div>
@@ -240,10 +294,18 @@ def build_confidence_bars_a(tokens, conf_thresh=0.75, filtered_count=0, failed_r
     rows_html = []
     for idx, item in enumerate(tokens, 1):
         pct = int(item["conf"] * 100)
+        raw_word = str(item["word"])
+        shown = _display_word(raw_word)
+        # 拼音还原成中文时，把小字拼音附在后面，方便现场解释"模型输出的是拼音"
+        pinyin_hint = (
+            f"<span style='font-family:monospace;font-size:11px;color:#94A3B8;"
+            f"font-weight:400;margin-left:5px;'>{raw_word}</span>"
+            if shown != raw_word else ""
+        )
         rows_html.append(f"""
         <div style="margin-bottom:8px;">
             <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:3px;">
-                <span style="font-weight:600;color:#1E293B;">#{idx} 静态手语词：「{item['word']}」</span>
+                <span style="font-weight:600;color:#1E293B;">#{idx} 静态手语词：「{shown}」{pinyin_hint}</span>
                 <span style="font-family:monospace;font-weight:600;color:#1E40AF;">{pct}% ({item['conf']:.2f}) ✓已通过阈值</span>
             </div>
             <div style="width:100%;height:7px;background:#E2E8F0;border-radius:999px;overflow:hidden;">
@@ -363,7 +425,7 @@ def call_agent_semantic_parser(word_list, scene_data):
         except Exception as exc:
             return f"{scene_data.get('translation', '')} [agent.py 提示: {exc}]", scene_data.get("ai_answer", "")
 
-    joined = "、".join(word_list)
+    joined = "、".join(_display_word(w) for w in word_list)
     return (
         scene_data.get("translation", f"您好，我想办理关于「{joined}」的政务事项。"),
         scene_data.get("ai_answer", f"【政务导办回答】请携带本人有效身份证件前往综合窗口办理（关键词：{joined}）。"),
@@ -437,13 +499,13 @@ def start(source_type, video_file, conf_thresh=0.75, auto_tts_mode="🔊 自动�
         )
     )
     conf_html = build_confidence_bars_a(_CURRENT_TOKENS, conf_thresh, filtered_cnt)
-    word_text = " → ".join([f"{t['word']} ({t['conf']:.2f})" for t in _CURRENT_TOKENS])
+    word_text = _display_token_seq(_CURRENT_TOKENS)
 
     translation, ai_answer = call_agent_semantic_parser(word_list, scene)
     combined_text = f"{translation} {ai_answer}" if FEATURE_FLAGS["SHOW_AI_GOV_ANSWER"] else translation
     large_html = build_large_translation_html(translation, ai_answer)
 
-    append_history_record("手语识别", " → ".join(word_list), translation, ai_answer)
+    append_history_record("手语识别", _display_seq(word_list), translation, ai_answer)
     hist_html = build_history_html(_HISTORY_RECORDS)
 
     is_auto = "自动" in str(auto_tts_mode)
@@ -485,10 +547,10 @@ def undo_last_word(conf_thresh):
 
     removed = _CURRENT_TOKENS.pop()
     conf_html = build_confidence_bars_a(_CURRENT_TOKENS, conf_thresh, 0)
-    word_text = " → ".join([f"{t['word']} ({t['conf']:.2f})" for t in _CURRENT_TOKENS])
+    word_text = _display_token_seq(_CURRENT_TOKENS)
 
     if not _CURRENT_TOKENS:
-        status_html = build_status_pill_a("paused", f"已撤回词汇「{removed['word']}」，当前词序列已清空")
+        status_html = build_status_pill_a("paused", f"已撤回词汇「{_display_word(removed['word'])}」，当前词序列已清空")
         return conf_html, "", build_large_translation_html("", ""), "", status_html
 
     word_list = [t["word"] for t in _CURRENT_TOKENS]
@@ -496,7 +558,7 @@ def undo_last_word(conf_thresh):
     combined_text = f"{translation} {ai_answer}" if FEATURE_FLAGS["SHOW_AI_GOV_ANSWER"] else translation
     large_html = build_large_translation_html(translation, ai_answer)
     status_html = build_status_pill_a(
-        "running", f"已撤回错误识别词「{removed['word']}」，可继续攒词或点击【确认成句】重新生成翻译"
+        "running", f"已撤回错误识别词「{_display_word(removed['word'])}」，可继续攒词或点击【确认成句】重新生成翻译"
     )
     return conf_html, word_text, large_html, combined_text, status_html
 
@@ -513,7 +575,7 @@ def confirm_sentence():
     translation, ai_answer = call_agent_semantic_parser(word_list, _CURRENT_SCENE)
     combined_text = f"{translation} {ai_answer}" if FEATURE_FLAGS["SHOW_AI_GOV_ANSWER"] else translation
     large_html = build_large_translation_html(translation, ai_answer)
-    append_history_record("手动确认成句", " → ".join(word_list), translation, ai_answer)
+    append_history_record("手动确认成句", _display_seq(word_list), translation, ai_answer)
     status_html = build_status_pill_a("running", f"已手动确认 {len(word_list)} 个手语词，Agent 已重新生成中文译文与政务导办回答")
     return large_html, combined_text, status_html, build_history_html(_HISTORY_RECORDS)
 

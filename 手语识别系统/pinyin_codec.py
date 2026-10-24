@@ -211,6 +211,17 @@ def to_hanzi(tokens) -> list[str]:
     return decode_tokens(tokens)["words"]
 
 
+@lru_cache(maxsize=512)
+def display_word(token) -> str:
+    """
+    单个 token 的**展示文本**：能还原成中文就显示中文，还原不了就原样显示。
+    与 to_hanzi 的区别：这个不做去重，也不剔除「确认」，保证与原始 token 一一对应，
+    界面上"第几个词"和置信度条才能对齐。
+    """
+    result = match_one(token)
+    return result["hanzi"] or str(token)
+
+
 # ------------------------------------------------------------------------------
 # 自测：python pinyin_codec.py
 # ------------------------------------------------------------------------------

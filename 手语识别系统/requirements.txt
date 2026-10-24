@@ -1,4 +1,5 @@
 # 界面与视觉
+# gradio 已在 6.30 上实测通过；4.x / 5.x 同样可用（app.py 里做了版本适配与样式注入）
 gradio>=4.20.0
 opencv-python>=4.8.0
 numpy>=1.24.0

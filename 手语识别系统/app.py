@@ -678,6 +678,57 @@ CUSTOM_CSS_A = """
     background: #CBD5E1;
     border-radius: 999px;
 }
+
+/* ---------------------------------------------------------------------------
+   强制浅色外观：本系统是政务大厅大屏演示，必须白底深字。
+   浏览器/系统处于深色模式时，gradio 会把正文变白，与我们的白色卡片撞色导致看不见。
+   这里同时覆盖 gradio 的主题变量与卡片内文字颜色，双保险。
+--------------------------------------------------------------------------- */
+:root, .dark, html.dark {
+    --body-background-fill: #F8FAFC;
+    --block-background-fill: #FFFFFF;
+    --body-text-color: #0F172A;
+    --block-label-text-color: #334155;
+    --block-title-text-color: #0F172A;
+    --input-background-fill: #FFFFFF;
+}
+.gradio-container { color: #1E293B !important; }
+.module-card-a h1, .module-card-a h2, .module-card-a h3, .module-card-a h4,
+.video-card-a h1, .video-card-a h2, .video-card-a h3, .video-card-a h4 {
+    color: #0F172A !important;
+}
+body, .gradio-container { background: #F8FAFC !important; }
+
+/* gradio 组件块统一白底：深色模式下否则会变成黑色块，卡片看起来是"破的" */
+.gradio-container .block,
+.gradio-container .form,
+.gradio-container .panel,
+.gradio-container .wrap {
+    background: #FFFFFF !important;
+    border-color: #E2E8F0 !important;
+}
+.gradio-container .primary {
+    background: #2563EB !important;
+    border-color: #1D4ED8 !important;
+    color: #FFFFFF !important;
+}
+.gradio-container input[type="radio"],
+.gradio-container input[type="checkbox"] {
+    accent-color: #2563EB;
+}
+
+/* 单选/多选组：深色模式下选项会变成深色块 + 橙色高亮，统一成白底蓝点 */
+.gradio-container {
+    --color-accent: #2563EB;
+    --color-accent-soft: #EFF6FF;
+    --primary-500: #2563EB;
+}
+.gradio-container .wrap > label,
+.gradio-container .wrap label {
+    background: #FFFFFF !important;
+    border-color: #E2E8F0 !important;
+    color: #0F172A !important;
+}
 """
 
 blocks_kwargs = {"title": "YOLO26 静态手语词识别智能体 - 政务服务专版(方案A)"}
@@ -688,6 +739,14 @@ except Exception:
     pass
 
 with gr.Blocks(**blocks_kwargs) as demo:
+    # ----------------------------------------------------------------------
+    # 样式注入（版本无关）
+    # gradio 6 起 launch() 不再接受 css 参数、Blocks(css=) 也被弱化，
+    # 导致整套卡片/横幅样式失效（白字白底、卡片变暗）。
+    # 用 <style> 注入到页面里，旧版本（4/5）与新版本（6+）都能生效。
+    # ----------------------------------------------------------------------
+    gr.HTML(f"<style>{CUSTOM_CSS_A}</style>")
+
     gr.HTML("""
     <div class="header-banner-a">
         <h1>YOLO26 静态手语词识别智能体 · 政务服务无障碍导办系统</h1>
@@ -735,9 +794,15 @@ with gr.Blocks(**blocks_kwargs) as demo:
                     visible=False,
                     height=140,
                 )
+                # gradio 6 会把 Image 的 label 浮在画面左上角，遮住我们画在帧上的状态条，
+                # 所以标签关掉、改用上方独立标题行。
+                gr.HTML(
+                    "<div style='font-size:12.5px;font-weight:700;color:#334155;"
+                    "padding:2px 0 4px 2px;'>📹 视频预览与 YOLO26 手部检测框展示（固定大画幅）</div>"
+                )
                 preview_image = gr.Image(
                     value=render_preview_frame_a("摄像头实时采集待命", active=False),
-                    label="视频预览与 YOLO26 手部检测框展示（固定大画幅）",
+                    show_label=False,
                     interactive=False,
                     height=480,
                 )

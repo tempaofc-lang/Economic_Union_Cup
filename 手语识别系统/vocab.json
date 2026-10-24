@@ -1,24 +1,27 @@
 {
-  "version": "1.0",
-  "_comment": "B 组与 A 组的共享词表。id 顺序必须与 A 组模型的 model.names 完全一致，联调前请逐条比对（见 docs/03_接口契约与A组对接清单.md §6 第3步）。",
-  "confirm_word": "确认",
-  "classes": {
-    "0": "你好",
-    "1": "请问",
-    "2": "身份证",
-    "3": "丢失",
-    "4": "补办",
-    "5": "社保卡",
-    "6": "医保",
-    "7": "激活",
-    "8": "窗口",
-    "9": "哪里",
-    "10": "营业执照",
-    "11": "办理",
-    "12": "需要",
-    "13": "什么",
-    "14": "材料",
-    "15": "谢谢",
-    "16": "确认"
-  }
+  "version": "2.0",
+  "_note": "YOLO 的类别名现在输出【拼音】（无声调）。请与 A 组 model.names 逐条对齐后再上线。aliases 用于容错（同音/简写/分隔符写法会被自动归一）。",
+  "confirm": {
+    "pinyin": "queren",
+    "hanzi": "确认"
+  },
+  "classes": [
+    { "id": 0,  "pinyin": "nihao",         "hanzi": "你好",     "aliases": ["nihao", "nh"] },
+    { "id": 1,  "pinyin": "qingwen",       "hanzi": "请问",     "aliases": ["qingwen", "qw"] },
+    { "id": 2,  "pinyin": "shenfenzheng",  "hanzi": "身份证",   "aliases": ["shenfen", "sfz", "shenfenz"] },
+    { "id": 3,  "pinyin": "diushi",        "hanzi": "丢失",     "aliases": ["diushi", "ds"] },
+    { "id": 4,  "pinyin": "buban",         "hanzi": "补办",     "aliases": ["buban", "bb"] },
+    { "id": 5,  "pinyin": "shebaoka",      "hanzi": "社保卡",   "aliases": ["shebao", "sbk"] },
+    { "id": 6,  "pinyin": "yibao",         "hanzi": "医保",     "aliases": ["yibao", "yb"] },
+    { "id": 7,  "pinyin": "jihuo",         "hanzi": "激活",     "aliases": ["jihuo", "jh"] },
+    { "id": 8,  "pinyin": "chuangkou",     "hanzi": "窗口",     "aliases": ["chuangkou", "ck"] },
+    { "id": 9,  "pinyin": "nali",          "hanzi": "哪里",     "aliases": ["nali", "nl"] },
+    { "id": 10, "pinyin": "yingyezhizhao", "hanzi": "营业执照", "aliases": ["yingye", "yingyezhao", "yyz"] },
+    { "id": 11, "pinyin": "banli",         "hanzi": "办理",     "aliases": ["banli", "bl"] },
+    { "id": 12, "pinyin": "xuyao",         "hanzi": "需要",     "aliases": ["xuyao", "xy"] },
+    { "id": 13, "pinyin": "shenme",        "hanzi": "什么",     "aliases": ["shenme", "sm"] },
+    { "id": 14, "pinyin": "cailiao",       "hanzi": "材料",     "aliases": ["cailiao", "cl"] },
+    { "id": 15, "pinyin": "xiexie",        "hanzi": "谢谢",     "aliases": ["xiexie", "xx"] },
+    { "id": 16, "pinyin": "queren",        "hanzi": "确认",     "aliases": ["queren", "ok", "confirm", "queding"] }
+  ]
 }

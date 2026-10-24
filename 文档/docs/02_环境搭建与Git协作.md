@@ -7,7 +7,7 @@
 
 ## 1. 装 Python
 
-1. 打开 <https://www.python.org/downloads/>，下载 **Python 3.10 或更高版本**（3.11 / 3.12 都行）。
+1. 确认本机安装了python，若无或版本过低，打开 <https://www.python.org/downloads/>，下载 **Python 3.10 或更高版本**（3.11 / 3.12 都行）。
 2. 安装时**务必勾选** `Add python.exe to PATH`（这一项在最下面，很容易漏）。
 3. 装完打开「命令提示符」或 PowerShell，输入：
 
@@ -56,8 +56,6 @@ cd D:\你的工作目录
 git clone <组长发你的仓库地址> Economic_Union_Cup
 cd Economic_Union_Cup
 ```
-
-> 如果组长还没建远端仓库，先让他把文件夹压缩包发你，解压后 `cd` 进去也一样，之后再加远端。
 
 ### 4.2 建虚拟环境
 

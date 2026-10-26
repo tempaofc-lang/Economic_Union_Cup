@@ -12,7 +12,7 @@
 <header class="banner">
   <div class="banner-main">
     <h1>手语视界 · 拼音解译调试台</h1>
-    <p>手动输入拼音 → 模拟 YOLO 识别 → 拼音解码 → Agent 连词成句 → 政务导办回答</p>
+    <p>手动输入拼音 → 模拟 YOLO 识别 → <strong>LLM 解码并连词成句</strong> → 流式实时输出 · 政务导办回答</p>
   </div>
   <div class="banner-meta" id="health">
     <span class="chip chip-muted">正在检查后端…</span>
@@ -31,21 +31,35 @@
       </div>
 
       <textarea id="pinyin-input" rows="2" spellcheck="false"
-        placeholder="例如：nihao shenfenzheng diushi buban"></textarea>
+        placeholder="例如：shenfenzeng diushi buban   （故意拼错也能被 LLM 纠正）"></textarea>
+
+      <div class="strategy-row">
+        <span class="strategy-label">解译策略</span>
+        <label class="seg">
+          <input type="radio" name="strategy" value="llm" checked>
+          <span>LLM 主导 <em>推荐</em></span>
+        </label>
+        <label class="seg">
+          <input type="radio" name="strategy" value="local">
+          <span>本地查表过滤</span>
+        </label>
+      </div>
+      <div class="strategy-note" id="strategy-note">
+        LLM 直接读原始拼音解码：可纠正错拼、按上下文消歧、推断词表外的常用词；本地查表仅作交叉校验。
+      </div>
 
       <div class="examples">
         <span class="examples-label">一键示例：</span>
-        <button class="btn btn-ghost btn-sm" data-example="nihao shenfenzheng diushi buban">身份证补办</button>
-        <button class="btn btn-ghost btn-sm" data-example="qingwen shebaoka jihuo chuangkou nali">社保卡激活</button>
-        <button class="btn btn-ghost btn-sm" data-example="banli yingyezhizhao xuyao shenme cailiao">营业执照材料</button>
+        <button class="btn btn-ghost btn-sm" data-example="nihao shenfenzheng diushi buban">标准场景</button>
+        <button class="btn btn-ghost btn-sm" data-example="shenfenzeng diushi buban">错拼 shenfenzeng</button>
+        <button class="btn btn-ghost btn-sm" data-example="wo yao buban shenfenzeng tiyuguan">词表外 + 噪声</button>
         <button class="btn btn-ghost btn-sm" data-example="buban shenfenzheng">语序倒置</button>
-        <button class="btn btn-ghost btn-sm" data-example="nihao diushi buban tiyuguan">含误识别词</button>
         <button class="btn btn-ghost btn-sm" data-example="chuangkou">只有泛词（应反问）</button>
         <button class="btn btn-ghost btn-sm" data-example="nihao shenfenzheng diushi* buban">含低置信度</button>
       </div>
 
       <div class="actions">
-        <button class="btn btn-primary" id="btn-full">▶ 走完整流程（识别 → 解译）</button>
+        <button class="btn btn-primary" id="btn-full">▶ 走完整流程（流式）</button>
         <button class="btn btn-secondary" id="btn-agent-only">⚡ 直接解译（跳过识别）</button>
         <button class="btn btn-stop" id="btn-clear">🗑 清空</button>
       </div>
@@ -67,7 +81,7 @@
     <div class="card">
       <div class="card-head">
         <h2>③ 支持词表</h2>
-        <span class="hint">点词条可追加到输入框</span>
+        <span class="hint">参考基线，非硬性边界；点词条可追加到输入框</span>
       </div>
       <div id="vocab" class="vocab"><span class="muted">加载中…</span></div>
     </div>
@@ -79,7 +93,7 @@
 
     <div class="card card-result">
       <div class="card-head">
-        <h2>解译结果</h2>
+        <h2>解译结果 <span class="stream-dot" id="stream-dot" hidden></span></h2>
         <div class="meta-chips" id="result-meta"></div>
       </div>
 
@@ -88,17 +102,27 @@
       </div>
     </div>
 
-    <div class="card" id="card-decode" hidden>
-      <div class="card-head"><h2>解码明细（可追溯）</h2></div>
+    <div class="card" id="card-mapping" hidden>
+      <div class="card-head">
+        <h2>解译明细（LLM 逐步理解 + 本地交叉校验）</h2>
+        <span class="hint" id="mapping-summary"></span>
+      </div>
       <table class="table">
-        <thead><tr><th>#</th><th>原始拼音</th><th>→</th><th>中文</th><th>匹配方式</th><th>得分</th></tr></thead>
-        <tbody id="decode-body"></tbody>
+        <thead>
+          <tr><th>#</th><th>原始拼音</th><th>LLM 解译</th><th>来源</th><th>本地查表</th><th>一致</th></tr>
+        </thead>
+        <tbody id="mapping-body"></tbody>
       </table>
     </div>
 
     <div class="card" id="card-tools" hidden>
       <div class="card-head"><h2>Agent 决策轨迹</h2><span class="hint">真实回显，不是装饰</span></div>
       <div id="tools-body" class="tools"></div>
+    </div>
+
+    <div class="card" id="card-raw" hidden>
+      <div class="card-head"><h2>模型流式原始输出</h2><span class="hint">用于说明这是边生成边渲染</span></div>
+      <pre id="raw-body" class="raw"></pre>
     </div>
 
     <div class="card">

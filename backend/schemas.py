@@ -39,6 +39,24 @@ class Clarify(BaseModel):
     options: list[str] = Field(default_factory=list)
 
 
+class TokenMapping(BaseModel):
+    """
+    逐 token 的解译明细，用于界面展示"LLM 到底是怎么理解每个拼音的"。
+
+    source：
+      vocab    —— 与词表吻合
+      inferred —— LLM 推断（错拼纠正 / 词表外政务词），note 里写了依据
+      ignored  —— 判为噪声，已丢弃
+      local    —— 规则兜底路径，来自本地查表
+    """
+    raw: str
+    word: Optional[str] = None
+    source: str = "vocab"
+    note: Optional[str] = None
+    local_word: Optional[str] = Field(default=None, description="本地查表结果，用于交叉校验")
+    agree: Optional[bool] = Field(default=None, description="与本地查表是否一致；无法比较时为 null")
+
+
 class ToolCall(BaseModel):
     """工具调用轨迹。界面做成"Agent 决策轨迹"可展开面板。"""
     name: str
@@ -79,6 +97,10 @@ class AgentRequest(BaseModel):
     words: list[str] = Field(default_factory=list, description="拼音序列（也兼容已解码的中文）")
     session_id: Optional[str] = None
     staff_reply: Optional[str] = Field(default=None, description="窗口工作人员的回复；首轮为 null")
+    strategy: Literal["llm", "local"] = Field(
+        default="llm",
+        description="llm=LLM 主导解码（默认）；local=先用封闭词表查表过滤，再交给 LLM 组句",
+    )
 
 
 class AgentResponse(BaseModel):
@@ -89,6 +111,9 @@ class AgentResponse(BaseModel):
     words: list[str] = Field(default_factory=list, description="解码后的中文词序列")
     unknown: list[str] = Field(default_factory=list, description="词表外、被忽略的拼音")
     decode: list[DecodeItem] = Field(default_factory=list)
+    mapping: list[TokenMapping] = Field(default_factory=list, description="逐 token 解译明细")
+    local_words: list[str] = Field(default_factory=list, description="本地查表结果，用于对照")
+    strategy: Literal["llm", "local"] = "llm"
 
     # —— 05 §3.3 冻结契约 ——
     translation: str = ""
@@ -117,6 +142,10 @@ class HealthResponse(BaseModel):
     llm_available: bool
     model: str
     kb_items: int
+    thinking: bool = Field(default=False, description="是否开启模型思考模式（关闭时首 token 更快）")
+    default_strategy: str = "llm"
+    env_file: Optional[str] = Field(default=None, description="实际加载的 .env 路径，null 表示没找到")
+    api_key_present: bool = Field(default=False, description="是否读到 DEEPSEEK_API_KEY")
 
 
 class VocabEntry(BaseModel):

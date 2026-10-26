@@ -30,6 +30,10 @@ def get_health() -> HealthResponse:
         llm_available=info["llm_available"],
         model=info["model"],
         kb_items=info["kb_items"],
+        thinking=bool(info.get("thinking", False)),
+        default_strategy=str(info.get("default_strategy", "llm")),
+        env_file=info.get("env_file"),
+        api_key_present=bool(info.get("api_key_present", False)),
     )
 
 

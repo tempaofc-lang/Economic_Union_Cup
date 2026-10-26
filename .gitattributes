@@ -1,6 +1,13 @@
 # 统一换行符，避免 Windows / macOS 混用产生无意义的整文件 diff
 * text=auto eol=lf
 
+# Windows 脚本必须用 CRLF：
+#   · 批处理（.cmd/.bat）用 LF 会导致 goto / for 行为异常，甚至找不到标签
+#   · PowerShell 5.1 对 CRLF 的兼容性也更好
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
 # 明确二进制文件
 *.docx binary
 *.xlsx binary

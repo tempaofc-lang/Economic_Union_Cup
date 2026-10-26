@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>手语视界 · 拼音解译调试台</title>
+<link rel="icon" href="/favicon.ico" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+
+<header class="banner">
+  <div class="banner-main">
+    <h1>手语视界 · 拼音解译调试台</h1>
+    <p>手动输入拼音 → 模拟 YOLO 识别 → 拼音解码 → Agent 连词成句 → 政务导办回答</p>
+  </div>
+  <div class="banner-meta" id="health">
+    <span class="chip chip-muted">正在检查后端…</span>
+  </div>
+</header>
+
+<main class="layout">
+
+  <!-- ============================ 左栏：输入与识别 ============================ -->
+  <section class="col col-left">
+
+    <div class="card">
+      <div class="card-head">
+        <h2>① 输入拼音串</h2>
+        <span class="hint">用空格分隔；词尾加 <code>*</code> 可模拟 0.62 的低置信度</span>
+      </div>
+
+      <textarea id="pinyin-input" rows="2" spellcheck="false"
+        placeholder="例如：nihao shenfenzheng diushi buban"></textarea>
+
+      <div class="examples">
+        <span class="examples-label">一键示例：</span>
+        <button class="btn btn-ghost btn-sm" data-example="nihao shenfenzheng diushi buban">身份证补办</button>
+        <button class="btn btn-ghost btn-sm" data-example="qingwen shebaoka jihuo chuangkou nali">社保卡激活</button>
+        <button class="btn btn-ghost btn-sm" data-example="banli yingyezhizhao xuyao shenme cailiao">营业执照材料</button>
+        <button class="btn btn-ghost btn-sm" data-example="buban shenfenzheng">语序倒置</button>
+        <button class="btn btn-ghost btn-sm" data-example="nihao diushi buban tiyuguan">含误识别词</button>
+        <button class="btn btn-ghost btn-sm" data-example="chuangkou">只有泛词（应反问）</button>
+        <button class="btn btn-ghost btn-sm" data-example="nihao shenfenzheng diushi* buban">含低置信度</button>
+      </div>
+
+      <div class="actions">
+        <button class="btn btn-primary" id="btn-full">▶ 走完整流程（识别 → 解译）</button>
+        <button class="btn btn-secondary" id="btn-agent-only">⚡ 直接解译（跳过识别）</button>
+        <button class="btn btn-stop" id="btn-clear">🗑 清空</button>
+      </div>
+
+      <div class="status" id="status">待命</div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>② 模拟识别结果</h2>
+        <span class="badge badge-warn" id="mock-badge" hidden>模拟数据 · 非真实模型输出</span>
+      </div>
+      <div id="tokens" class="tokens">
+        <div class="empty">点上面的按钮后，这里显示 YOLO 风格的 token（词 / 置信度 / 检测框）</div>
+      </div>
+      <div class="warn-note" id="mock-warning" hidden></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>③ 支持词表</h2>
+        <span class="hint">点词条可追加到输入框</span>
+      </div>
+      <div id="vocab" class="vocab"><span class="muted">加载中…</span></div>
+    </div>
+
+  </section>
+
+  <!-- ============================ 右栏：解译输出 ============================ -->
+  <section class="col col-right">
+
+    <div class="card card-result">
+      <div class="card-head">
+        <h2>解译结果</h2>
+        <div class="meta-chips" id="result-meta"></div>
+      </div>
+
+      <div id="result-body">
+        <div class="empty big-empty">等待解译。左侧输入拼音后点「走完整流程」。</div>
+      </div>
+    </div>
+
+    <div class="card" id="card-decode" hidden>
+      <div class="card-head"><h2>解码明细（可追溯）</h2></div>
+      <table class="table">
+        <thead><tr><th>#</th><th>原始拼音</th><th>→</th><th>中文</th><th>匹配方式</th><th>得分</th></tr></thead>
+        <tbody id="decode-body"></tbody>
+      </table>
+    </div>
+
+    <div class="card" id="card-tools" hidden>
+      <div class="card-head"><h2>Agent 决策轨迹</h2><span class="hint">真实回显，不是装饰</span></div>
+      <div id="tools-body" class="tools"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>本次会话记录</h2>
+        <button class="btn btn-ghost btn-sm" id="btn-reset-session">清空会话</button>
+      </div>
+      <div id="session-body" class="session"><div class="empty">暂无记录</div></div>
+    </div>
+
+  </section>
+</main>
+
+<script src="/assets/app.js"></script>
+</body>
+</html>

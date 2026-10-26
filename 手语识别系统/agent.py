@@ -402,8 +402,14 @@ def _rule_based(words: list) -> dict:
 _cache = {}
 
 
-def _build_user_message(raw_tokens: list, decoded_words: list, unknown: list) -> str:
-    """把「原始拼音 + 规则预解码结果」一起交给模型，让它既能纠错又有锚点。"""
+def _build_user_message(raw_tokens: list, decoded_words: list, unknown: list,
+                        kb_context: str = "") -> str:
+    """
+    把「原始拼音 + 规则预解码结果 + 可选的知识库权威信息」一起交给模型。
+
+    kb_context 由调用方（backend 的 gov_kb 工具）注入。有它时模型只负责措辞，
+    窗口号/材料/费用一律以知识库为准，从根上消除"硬编码数字"和"编造收费"的问题。
+    """
     lines = [
         f"输入拼音：{' '.join(raw_tokens)}",
         "",
@@ -411,16 +417,24 @@ def _build_user_message(raw_tokens: list, decoded_words: list, unknown: list) ->
     ]
     if unknown:
         lines.append(f"词表外拼音（请判断是否有意义，无意义请放进 ignored）：{'、'.join(unknown)}")
+    if kb_context:
+        lines.extend([
+            "",
+            "# 权威办事信息（来自本地政务知识库，answer 与 confirm_card 中的窗口、材料、费用",
+            "# 必须严格以此为准，不得改写，也不得补充这里没有的收费或政策细节）",
+            kb_context,
+        ])
     lines.append("")
     lines.append("请按 system 指令输出 json。")
     return "\n".join(lines)
 
 
-def parse_semantics_detail(token_list) -> dict:
+def parse_semantics_detail(token_list, kb_context: str = "") -> dict:
     """
-    完整版解译，返回包含调试信息的字典（界面调试面板、测试脚本用）。
+    完整版解译，返回包含调试信息的字典（界面调试面板、测试脚本、backend API 用）。
 
-    参数 token_list: list[str]，元素是 YOLO 输出的拼音（也兼容已是中文的情况）
+    参数 token_list : list[str]，元素是 YOLO 输出的拼音（也兼容已是中文的情况）
+         kb_context : str，可选。知识库给出的权威办事信息，会注入到用户消息里。
     返回:
         {
           "translation": str,   "answer": str,     "confidence": float,
@@ -459,17 +473,20 @@ def parse_semantics_detail(token_list) -> dict:
                 "confidence": 0.0, "source": "rule"}
 
     # 命中缓存（演示时同一段手语会重复触发，避免重复烧钱和等待）
-    cache_key = tuple(words)
+    # 注意：缓存键必须带上知识库上下文，否则"同一串拼音、不同权威信息"会串味
+    cache_key = (tuple(words), kb_context)
     if ENABLE_CACHE and cache_key in _cache:
         cached = dict(_cache[cache_key])
         cached.update(base)
+        cached["cached"] = True          # 告诉上层"这是缓存命中"，界面才不会把 0ms 当成真实耗时
         return cached
 
     # ---- 第二层：大模型解译 ----
     if llm_available():
         messages = [
             {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user", "content": _build_user_message(tokens, words, decoded["unknown"])},
+            {"role": "user",
+             "content": _build_user_message(tokens, words, decoded["unknown"], kb_context)},
         ]
 
         last_err = None
@@ -479,6 +496,7 @@ def parse_semantics_detail(token_list) -> dict:
                 result = _normalize_result(_parse_json_loose(content))
                 result.update(base)
                 result["source"] = "llm"
+                result["cached"] = False
                 if ENABLE_CACHE:
                     _cache[cache_key] = dict(result)
                 return result
@@ -499,6 +517,7 @@ def _fallback_from_rules(words: list, base: dict, error=None) -> dict:
     result.update(base)
     result.setdefault("confirm_card", None)
     result.setdefault("clarify", None)
+    result.setdefault("cached", False)
     result["source"] = "rule"
     result["error"] = error
     return result

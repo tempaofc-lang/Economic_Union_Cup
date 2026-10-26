@@ -1,0 +1,8 @@
+# backend 依赖（在项目根目录执行：pip install -r backend/requirements.txt）
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.6.0
+
+# 解译层与知识库：复用 手语识别系统/ 下已实现的 agent.py / pinyin_codec.py
+requests>=2.28.0
+python-dotenv>=1.0.0

@@ -84,6 +84,8 @@ def predict_sign_tokens(source_type="本机摄像头实时采集", video_file=No
     """
     global _MOCK_INDEX
 
+    fallback_reason = None
+
     if USE_REAL_YOLO_MODEL:
         # ======================================================================
         # 方案B 真实推理：YOLO检测 -> HandCNN分类 -> 字母拼读 -> vocab 整词
@@ -93,9 +95,19 @@ def predict_sign_tokens(source_type="本机摄像头实时采集", video_file=No
             import sign_real_link
             return sign_real_link.predict_tokens(source_type, video_file, conf_thresh)
         except Exception as e:
+            fallback_reason = str(e)
             print(f"[vision_engine] 真实模型推理失败，回退模拟数据: {e}")
 
     # 默认使用内置的政务大厅模拟数据（支持无显卡环境直接联调演示）
-    scene = MOCK_SCENES[_MOCK_INDEX % len(MOCK_SCENES)]
+    # 复制一份再打标，避免把 is_mock 之类字段写进 MOCK_SCENES 模板
+    scene = dict(MOCK_SCENES[_MOCK_INDEX % len(MOCK_SCENES)])
     _MOCK_INDEX += 1
+
+    # 打上"这是假数据"的标记，让界面能显式告警。
+    # 否则权重路径出错时，界面照样显示"你好/身份证"，肉眼完全看不出是模拟值。
+    scene["is_mock"] = True
+    scene["is_mock_reason"] = fallback_reason or (
+        "USE_REAL_YOLO_MODEL = False，未启用真实模型" if not USE_REAL_YOLO_MODEL
+        else "真实模型未返回结果"
+    )
     return None, list(scene["tokens"]), scene

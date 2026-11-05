@@ -73,6 +73,26 @@ def _display_seq(word_list):
     return " → ".join(_display_word(w) for w in word_list)
 
 
+# ------------------------------------------------------------------------------
+# 模拟数据状态：真实模型不可用时 vision_engine 会在 scene 里打 is_mock 标记，
+# 界面必须在显眼位置提示，避免答辩时把假数据当成真实识别结果。
+# ------------------------------------------------------------------------------
+_MOCK_STATE = {"is_mock": False, "reason": ""}
+
+
+def build_mock_banner(reason=""):
+    detail = f"原因：{reason}" if reason else "真实模型未启用或不可用"
+    return f"""
+    <div style="background:#7F1D1D;color:#FEE2E2;border:1px solid #B91C1C;border-radius:8px;
+                padding:10px 14px;margin-bottom:8px;font-size:13.5px;font-weight:700;">
+        ⚠️ 当前展示的是【模拟数据】，不是真实识别结果
+        <div style="font-weight:400;font-size:11.5px;color:#FCA5A5;margin-top:3px;line-height:1.5;">
+            {detail} —— 仅用于界面联调，请勿用于答辩演示或录制演示视频。
+        </div>
+    </div>
+    """
+
+
 def _display_token_seq(tokens):
     """把 [{"word":"nihao","conf":0.96}, ...] 显示成 "你好 (0.96) → 身份证 (0.94)"。"""
     return " → ".join(f"{_display_word(t['word'])} ({t['conf']:.2f})" for t in tokens)
@@ -208,7 +228,7 @@ def build_status_pill_a(state="idle", message="系统空闲：等待启动指令
     agent_mode = "已连接 agent.py" if HAS_EXTERNAL_AGENT else "内置模拟引擎"
     tts_badge = "🔊 自动播报:开" if "自动" in str(auto_tts_mode) else "🔇 静音模式"
 
-    return f"""
+    status_html = f"""
     <div style="display:flex;align-items:center;justify-content:space-between;background:{bg_color};
                 border:1px solid {border_color};border-radius:8px;padding:9px 16px;font-size:13.5px;color:#1E293B;">
         <div style="display:flex;align-items:center;gap:10px;">
@@ -223,6 +243,31 @@ def build_status_pill_a(state="idle", message="系统空闲：等待启动指令
         </span>
     </div>
     """
+    # 处于模拟数据状态时，横幅跟着状态栏一起渲染，保证任何交互后提示都不会消失
+    if _MOCK_STATE["is_mock"]:
+        return build_mock_banner(_MOCK_STATE["reason"]) + status_html
+
+    return status_html
+
+
+# 启动时先判断一次，进界面就能看到告警，不必等第一次点击。
+# 优先按开关判断；开关开着就实际检查权重文件（只查路径，不加载模型）。仍不行则在
+# 第一次识别回退时由 start() 再更新一次。
+def _detect_initial_mock_state():
+    if not getattr(vision_engine, "USE_REAL_YOLO_MODEL", False):
+        return True, "USE_REAL_YOLO_MODEL = False，未启用真实模型"
+    try:
+        import sign_real_link
+        sign_real_link.resolve_yolo_path()
+        sign_real_link.resolve_cls_path()
+        return False, ""
+    except Exception as exc:
+        # 权重缺失的报错是多行的（后面跟一长串已尝试路径），横幅里只取第一句
+        first_line = str(exc).strip().splitlines()[0] if str(exc).strip() else "真实模型不可用"
+        return True, first_line.split("。")[0].rstrip("：: ") + "。"
+
+
+_MOCK_STATE["is_mock"], _MOCK_STATE["reason"] = _detect_initial_mock_state()
 
 
 def build_vocab_bar_html():
@@ -481,6 +526,12 @@ def start(source_type, video_file, conf_thresh=0.75, auto_tts_mode="🔊 自动�
         scene = _CURRENT_SCENE
 
     _CURRENT_SCENE = scene
+
+    # 记录本轮是否为模拟数据（vision_engine 在回退时会在 scene 里打标），
+    # 供状态栏统一渲染告警横幅。
+    _MOCK_STATE["is_mock"] = bool(scene.get("is_mock"))
+    _MOCK_STATE["reason"] = scene.get("is_mock_reason") or ""
+
     valid_tokens = [t for t in all_tokens if t["conf"] >= conf_thresh]
     if not valid_tokens:
         return simulate_failure(conf_thresh, auto_tts_mode)

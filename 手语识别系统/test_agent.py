@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 
 try:
@@ -139,7 +140,10 @@ def judge(case: dict, result: dict) -> tuple[bool, list[str]]:
     if hit_forbid:
         reasons.append(f"出现不该有的词 {hit_forbid}")
 
-    if tr and len(tr) < 4:
+    # 去掉标点/空白后再看长度：单字词场景（如输入 xiexie → "谢谢。"）本来就短，
+    # 用 len(tr) < 4 会把它误判成失败。真正要拦的是空串和只有标点的垃圾输出。
+    core = re.sub(r"[\s，。！？、,.!?；;：:…—\-\"'“”‘’]", "", tr)
+    if tr and len(core) < 2:
         reasons.append("translation 过短")
 
     return (len(reasons) == 0), reasons

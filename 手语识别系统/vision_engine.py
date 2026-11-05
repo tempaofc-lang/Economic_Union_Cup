@@ -7,6 +7,9 @@
      系统会自动轮播内置的「政务服务三大典型场景」模拟检测数据。
   2. 当邵嫣然导出 `best.pt` 且杨李灿完成分类脚本后，将 `USE_REAL_YOLO_MODEL` 改为 `True`，
      并在 `predict_sign_tokens()` 中填入真实推理代码即可，无需改动 `app.py`！
+  3. **A 组为逐字母输出**：打开 `USE_LETTER_MODE = True` 后，逐帧字母会先经过
+     letter_pipeline（去抖 + 停顿分词 + 确认成句）再转成拼音词，
+     下游 agent 拿到的仍是 `[{word, conf, bbox}]`，接口不变。
 ================================================================================
 """
 
@@ -14,6 +17,33 @@
 # 🔧 技术 A 组模型切换开关：接入真实 best.pt 时请改为 True
 # ------------------------------------------------------------------------------
 USE_REAL_YOLO_MODEL = False
+
+# ------------------------------------------------------------------------------
+# 🔤 逐字母模式的开关与参数（A 组的模型是一帧输出一个字母）
+#   True  —— 走"字母 → 拼音词"链路（当前用 LETTER_DEMO_SCRIPT 模拟逐帧输出）
+#   False —— 保持原来的"直接输出词"的模拟场景
+# 等 A 组权重到位后，把 _predict_from_letters() 里的模拟回放换成真实推理即可。
+# ------------------------------------------------------------------------------
+USE_LETTER_MODE = True
+
+# 无模型时的演示脚本：空格表示词边界（松手停顿），末尾自动补「确认」手势。
+# 轮播多个脚本，保留原来"三大场景"的演示效果，同时把字母链路走全。
+LETTER_DEMO_SCRIPTS = [
+    "shenfenzheng",                  # 身份证（一个长词，12 个字母）
+    "shebaoka jihuo",                # 社保卡 激活（两个词，演示停顿分词）
+    "yingyezhizhao cailiao",         # 营业执照 材料
+]
+_LETTER_INDEX = 0
+
+# 送检时画的框（字母模型不返回框，这里给一个固定 ROI 供界面绘制）
+LETTER_BOX = (250, 120, 510, 360)
+
+try:
+    import letter_pipeline
+    HAS_LETTER_PIPELINE = True
+except ImportError:            # agent/letter_pipeline 不在同一目录时优雅退化
+    letter_pipeline = None
+    HAS_LETTER_PIPELINE = False
 
 # 政务服务大厅支持的 16 个核心静态手语词库（张明慧、杨李灿可根据 data.yaml 实际类别修改）
 GOV_SUPPORTED_WORDS = [
@@ -82,6 +112,9 @@ def predict_sign_tokens(source_type="本机摄像头实时采集", video_file=No
     """
     global _MOCK_INDEX
 
+    if USE_LETTER_MODE:
+        return _predict_from_letters(source_type, video_file, conf_thresh)
+
     if USE_REAL_YOLO_MODEL:
         # ======================================================================
         # TODO: 邵嫣然、杨李灿在此处接入真实 YOLO26 (best.pt) 与静态手语分类模型
@@ -97,3 +130,40 @@ def predict_sign_tokens(source_type="本机摄像头实时采集", video_file=No
     scene = MOCK_SCENES[_MOCK_INDEX % len(MOCK_SCENES)]
     _MOCK_INDEX += 1
     return None, list(scene["tokens"]), scene
+
+
+def _predict_from_letters(source_type, video_file, conf_thresh, script=None):
+    """
+    逐字母模式的推理入口。
+
+    真实链路应当是：
+        for frame in 视频流:
+            letter, conf = 字母模型(frame)          # A 组提供
+            event = stream.feed(letter, conf)       # 去抖 + 停顿分词 + 确认成句
+            if event["sentence"]: 交给下游
+
+    当前 A 组权重未到位，这里用 LETTER_DEMO_SCRIPT 按"每个字母保持 3 帧"回放，
+    走的是**同一套** letter_pipeline 逻辑，所以切到真实模型时只需替换数据来源。
+    """
+    scene = {
+        "scene_name": "逐字母识别（去抖 + 停顿分词 + 确认成句）",
+        "translation": "",
+        "ai_answer": "",
+    }
+
+    if not HAS_LETTER_PIPELINE:
+        return None, [], {"scene_name": "逐字母模式不可用：未找到 letter_pipeline.py"}
+
+    global _LETTER_INDEX
+    if script is None:
+        script = LETTER_DEMO_SCRIPTS[_LETTER_INDEX % len(LETTER_DEMO_SCRIPTS)]
+        _LETTER_INDEX += 1
+
+    tokens, trace = letter_pipeline.simulate(script)
+
+    # 不在这里做阈值过滤：app.py 会统一按滑块过滤，并展示"过滤了几个"
+    raw_tokens = [
+        {"word": t["word"], "conf": t["conf"], "bbox": LETTER_BOX} for t in tokens
+    ]
+    scene["scene_name"] += f"：{' / '.join(t['word'] for t in tokens) or '（未识别到字母）'}"
+    return None, raw_tokens, scene

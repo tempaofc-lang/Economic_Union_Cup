@@ -16,6 +16,10 @@ class LetterAdapter:
 
     def feed(self, label, conf=0.0):
         """每帧输入 YOLO 预测的字母和置信度。"""
+        # 置信度可能来自空检测（None）或被上游转成了字符串，直接比较会抛 TypeError，
+        # 而这里的异常会打断整个识别循环，所以统一兜成 0（当作无效帧处理）。
+        if not isinstance(conf, (int, float)):
+            conf = 0.0
         if (
             not isinstance(label, str)
             or len(label) != 1

@@ -145,13 +145,18 @@ OMP: Error #15: Initializing libiomp5md.dll, but found libiomp5md.dll already in
 
 查找顺序：**环境变量 → 仓库内固定位置 → A 组原始路径**（原始路径在 E 盘，只对 A 组自己的机器有效）。
 
-| 模型 | 环境变量 | 推荐放置位置 |
-| :-- | :-- | :-- |
-| YOLO 检测 | `SIGN_YOLO_PT` | `手语识别系统/weights/yolo_best.pt` |
-| HandCNN 分类 | `SIGN_CLS_PT` | `手语识别系统/weights/cls_best.pt` |
+| 模型 | 环境变量 | 仓库内位置 | 大小 |
+| :-- | :-- | :-- | --: |
+| YOLO 检测 | `SIGN_YOLO_PT` | `手语识别系统/weights/yolo_best.pt` | 5.22 MB |
+| HandCNN 分类 | `SIGN_CLS_PT` | `手语识别系统/weights/cls_best.pt` | 2.40 MB |
 
-`*.pt` 已被 `.gitignore` 排除，不会误提交。缺权重时会给出可操作的报错（列出已尝试的路径），
+**这两个权重已经在仓库里了**（`.gitignore` 特意放行了这两个文件，其余 `*.pt`、`runs/`、`last.pt` 仍被挡住），
+克隆下来就能直接跑，不用再找 A 组要。缺权重时会给出可操作的报错（列出已尝试的路径），
 而不是裸 `FileNotFoundError`。
+
+> ⚠️ 交付包里有一个容易混淆的点：`D:\Downloads\分类模型交付包\best.pt` 与
+> `checkpoints\best.pt` **MD5 完全相同**，都是分类器，不是检测权重。
+> 检测权重来自 `MyDrive\yolo\runs\detect\train-2\weights\best.pt`。
 
 ### 5.4 拼读层修复（本次联调做的两处改动）
 
@@ -176,9 +181,39 @@ OMP: Error #15: Initializing libiomp5md.dll, but found libiomp5md.dll already in
 
 ### 5.5 当前状态（本机实测）
 
-- 依赖：已装齐（torch / ultralytics / cv2 / PIL / numpy）
-- L1：❌ 权重缺失（`E:` 盘不存在，仓库内也没有 `.pt`），**卡在权重加载，不是代码问题**
+- 依赖：已装齐（torch 2.15.0+cpu / ultralytics 8.4.202 / cv2 / PIL / numpy）
+- 权重：两份都到位，已入库（`weights/yolo_best.pt`、`weights/cls_best.pt`）
+- L1：✅ **四行全绿，退出码 0**
 - L2：✅ 拼读层 19/19 通过（含容错、残余透传、7 个既有用例零回归）
-- L3：✅ 能正确回退并打印具体原因
-- L4/L5：⛔ 需先拿到权重 + 摄像头
+- L3：✅ 契约正常；真实图片上检测出框、分类出字母
+- 实现一致性：同一裁剪图，本项目 `classify_crop` 与交付包 `predict_hand_crop` 判定一致
+  （差异只在官方实现会把 conf<0.6 显示成"未知"）
+- L4：⏳ 界面可启动（模拟数据横幅已能正确显示/隐藏）
+- L5：⛔ **真人打手语还没测**，需答辩机位实测
+
+### 5.6 一个影响准确率的待定问题
+
+检测模型的训练指标（`results.csv` 第 100 轮，100 epochs，imgsz 640）：
+
+| 指标 | 数值 |
+| :-- | --: |
+| mAP50 | 0.866 |
+| mAP50-95 | 0.663 |
+| precision | 0.880 |
+| recall | 0.807 |
+
+对比 HandCNN 分类器的测试集准确率 **61.2%**，**YOLO 自己判字母反而更准**。
+但当前链路丢掉 YOLO 的类别、只用 CNN 的结果，还在两者不一致时把 CNN 置信度 ×0.7。
+相当于把一个 88% 的模型降级成 61% 再打折。
+
+建议在摄像头前做 A/B（各测 20 个字母）：
+
+| 策略 | 做法 |
+| :-- | :-- |
+| A（当前） | CNN 类别 + 共识惩罚 |
+| B | CNN 类别、**取消** 0.7 惩罚 |
+| C | 直接用 **YOLO 的类别**，CNN 仅作参考 |
+
+哪条准就用哪条，改动都在 `sign_real_link.classify_crop` 与 `predict_tokens` 的几行之内。
+
 

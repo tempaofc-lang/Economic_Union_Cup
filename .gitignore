@@ -23,6 +23,15 @@ weights/
 datasets/
 runs/
 
+# 例外：比赛交付用的两个推理权重（合计 7.6 MB）入库，
+# 让队友/评委克隆下来即可直接跑，不必再单独找权重。
+# 写法必须是「放行目录 → 忽略目录内全部 → 只放行这两个文件」，
+# 否则 last.pt / 训练日志之类会被一起带进来。
+!手语识别系统/weights/
+手语识别系统/weights/*
+!手语识别系统/weights/yolo_best.pt
+!手语识别系统/weights/cls_best.pt
+
 # 密钥与本地配置（API Key 只放在 .env，.env 已被忽略）
 .env
 .env.*

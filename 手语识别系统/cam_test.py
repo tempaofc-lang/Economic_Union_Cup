@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-cam_test.py —— 摄像头实时手语测试（方案B 链路，本地显示，不录像不外传）
+cam_test.py —— 摄像头实时手语测试（方案B 单级 YOLO 版，本地显示，不录像不外传）
+
+【本版改动】删除第二级 HandCNN，字母与置信度直接取自 YOLO 输出。
+  如需对照两级级联，把 sign_real_link.py 里的 ENABLE_CNN 改为 True 即可。
 
 操作：
   1) python cam_test.py        # 弹出摄像头窗口（按 q 随时退出）
@@ -9,7 +12,7 @@ cam_test.py —— 摄像头实时手语测试（方案B 链路，本地显示�
   推荐练习词：nali(4字母) / yibao(5字母) / xiexie(6字母) / banli(6字母)
 
 窗口信息：
-  frame   —— 当前帧识别到的字母与置信度
+  frame   —— 当前帧识别到的字母与置信度（直接来自 YOLO）
   letters —— 已提交的字母流（连续 2 帧以上相同才提交）
   words   —— 按 vocab.json 拼读出的拼音整词
   底部蓝字 —— pinyin_codec 词表还原的中文
@@ -57,11 +60,14 @@ def main():
         sys.exit(2)
 
     targets = srl.load_pinyin_targets()
+    guard = srl.SwitchGuard()          # 识别摇摆时触发双尺度复核
     committed, cconfs = [], []
     last_letter, run, run_conf = None, 0, 0.0
     cur_letter, cur_conf = None, 0.0
+    cur_mode = "normal"
     t0 = time.time()
     warn_once = False
+    n_recheck = 0
     print("[cam_test] 窗口已打开：逐个字母打手语（每个保持约1秒），按 q 结束 ...")
 
     while time.time() - t0 < T_LIMIT:
@@ -74,9 +80,15 @@ def main():
         try:
             box = srl.best_box_of_frame(small)
             if box is not None:
-                cur_letter, cur_conf = srl.classify_crop(small, box)
+                cur_letter, cur_conf = srl.recognize_frame(small, box)
+                cur_letter, cur_conf, cur_mode = guard.resolve(small, cur_letter, cur_conf)
+                if cur_mode.startswith("recheck"):
+                    n_recheck += 1
+                if cur_conf < srl.CLS_MIN_CONF:   # 置信度统一按一个门槛过滤（含复核结果）
+                    cur_letter = None
             else:
                 cur_letter, cur_conf = None, 0.0
+                guard.hist.append(None)
         except Exception as e:
             if not warn_once:
                 print("[warn] 推理异常:", e)
@@ -106,8 +118,16 @@ def main():
         # 绘制
         if box:
             cv2.rectangle(small, (box["x1"], box["y1"]), (box["x2"], box["y2"]), (0, 255, 0), 2)
-        put(small, f"frame: {cur_letter or '-'}  conf: {cur_conf:.2f}", (8, 24), 0.65, (0, 255, 255))
-        put(small, "letters: " + "-".join(committed[-14:]), (8, 50), 0.6)
+        conf_color = (0, 255, 255) if cur_conf >= 0.5 else (60, 160, 255)
+        tag = " [recheck]" if cur_mode.startswith("recheck") else ""
+        put(small, f"frame: {cur_letter or '-'}  conf: {cur_conf:.2f}{tag}", (8, 24), 0.65, conf_color)
+        ratio_txt = ""
+        if box:
+            side = max(box["x2"] - box["x1"], box["y2"] - box["y1"])
+            ratio_txt = f"  hand {side / min(small.shape[:2]):.2f}"
+            if side / min(small.shape[:2]) < 0.45:
+                ratio_txt += " <- 凑近点!"
+        put(small, "letters: " + "-".join(committed[-14:]) + ratio_txt, (8, 50), 0.6)
         put(small, "words: " + " ".join(words), (8, 76), 0.6, (140, 255, 140))
         put(small, f"{int(time.time() - t0)}s/{T_LIMIT}s | q=quit | hold each letter ~1s",
             (8, 470), 0.5, (200, 200, 200))

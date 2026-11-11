@@ -13,6 +13,7 @@
 
 import time
 import inspect
+import threading
 import cv2
 import numpy as np
 import gradio as gr
@@ -98,6 +99,7 @@ def _display_token_seq(tokens):
     return " → ".join(f"{_display_word(t['word'])} ({t['conf']:.2f})" for t in tokens)
 
 # 全局运行时状态（用于支持撤回上一词、手动确认成句、历史记录管理）
+CLS_MIN_CONF_DISPLAY = 0.40   # 与 sign_real_link.CLS_MIN_CONF 保持一致，仅用于界面文案
 _CURRENT_TOKENS = []
 _CURRENT_SCENE = {
     "scene_name": "政务场景一：身份证挂失与补办咨询",
@@ -117,7 +119,241 @@ _HISTORY_RECORDS = [
 _NEXT_RECORD_ID = 2
 
 
-def render_preview_frame_a(mode_text="摄像头实时采集待命", active=False, token_info=None, conf_thresh=0.75, failed=False):
+# ==============================================================================
+# 后台摄像头预览线程
+# ==============================================================================
+# 原界面用 gr.Image 显示一张静态占位图，用户完全看不到自己——会误判成"摄像头没开"。
+# 这里用一条常驻线程持续抓帧、画上检测框，再由 gradio 定时器推送到预览框。
+# 线程只负责"看"，真正的识别仍由点【开始识别】触发，互不抢占：
+# 识别开始前会调用 cam_stream.pause()，结束后 resume()，避免两处同时 read 同一设备。
+DETECT_EVERY = 6      # 每 6 帧跑一次 YOLO（其余帧沿用上次框），大幅降 CPU
+DETECT_IMGSZ = 480    # 预览检测用 480 分辨率，比 640 快一倍多，画框精度足够
+PREVIEW_FRAME_GAP = 0.03   # 抓帧间隔≈30fps 上限，避免空转吃满单核
+PREVIEW_W, PREVIEW_H = 760, 480   # 推送给浏览器的统一尺寸，控传输量
+
+
+class CameraPreview:
+    def __init__(self):
+        self.cap = None
+        self.frame = None            # 最新一帧（RGB，已画框）
+        self.lock = threading.Lock()
+        self.running = False
+        self.enabled = True          # 识别期间置 False，暂停抓帧让出设备
+        self.error = ""
+        self._thread = None
+        self._model = None
+        # ---- 录制模式：用户在网页点「开始识别」后开始累积，点「停止」才结算 ----
+        self.recording = False
+        self.rec_stream = []         # 每帧的字母（None=未检出）
+        self.rec_confs = []          # 与 rec_stream 对齐的置信度
+        self.rec_started = 0.0
+        self.rec_last_letter = None
+        self.rec_last_box = None
+
+    # ---------------- 录制控制 ----------------
+    def rec_begin(self):
+        """开始录制：清空缓冲，从此刻起每一帧都参与识别。"""
+        with self.lock:
+            self.rec_stream = []
+            self.rec_confs = []
+            self.rec_last_letter = None
+            self.rec_started = time.time()
+            self.recording = True
+        print("[record] 开始录制，等待用户比划...", flush=True)
+
+    def rec_end(self):
+        """结束录制，返回 (letters, confs, diag)。"""
+        with self.lock:
+            self.recording = False
+            stream = list(self.rec_stream)
+            confs = list(self.rec_confs)
+            dur = time.time() - self.rec_started
+            box = self.rec_last_box
+        print(f"[record] 结束录制：{len(stream)} 帧 / {dur:.1f}s", flush=True)
+        return stream, confs, {"frames": len(stream), "seconds": round(dur, 1), "last_box": box}
+
+    def _open(self):
+        try:
+            import sign_real_link
+            if self._model is None:
+                self._model = sign_real_link.get_yolo_model()
+            cap, desc = sign_real_link.open_camera(verbose=False)
+            with self.lock:
+                self.cap = cap
+                self.error = ""
+            print(f"[preview] 实时预览已启动：{desc}")
+            return True
+        except Exception as exc:
+            msg = str(exc).strip().splitlines()[0] if str(exc).strip() else "摄像头不可用"
+            with self.lock:
+                changed = (msg != self.error)
+                self.error = msg
+            if changed:      # 只在原因变化时打印，避免每秒刷屏
+                print(f"[preview] 预览启动失败（后台每 3 秒自动重试）: {msg}")
+            return False
+
+    def _loop(self):
+        self._open()
+        fail = 0
+        while self.running:
+            if not self.enabled:
+                time.sleep(0.1)
+                continue
+            with self.lock:
+                cap = self.cap
+            if cap is None:
+                time.sleep(3.0)
+                if self.error:
+                    self._open()          # 每 3 秒重试，插上/关掉占用程序后能自愈
+                continue
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                fail += 1
+                if fail > 30:             # 连续读不到帧，重开设备
+                    with self.lock:
+                        try:
+                            cap.release()
+                        except Exception:
+                            pass
+                        self.cap = None
+                    fail = 0
+                time.sleep(0.03)
+                continue
+            fail = 0
+            try:
+                drawn, boxes = self._draw(frame)
+            except Exception:
+                drawn, boxes = frame, []
+            with self.lock:
+                self.frame = cv2.cvtColor(drawn, cv2.COLOR_BGR2RGB)
+
+            # 录制中：把本帧的字母记进缓冲（录制时不降频，保证每个字母都被采到）
+            if self.recording:
+                letter, conf = (boxes[0][5], boxes[0][4]) if boxes else (None, 0.0)
+                with self.lock:
+                    if self.recording:
+                        self.rec_stream.append(letter)
+                        self.rec_confs.append(conf)
+                        if boxes:
+                            self.rec_last_box = boxes[0]
+            time.sleep(PREVIEW_FRAME_GAP)   # 限制抓帧节奏，别把 CPU 跑满
+
+    def _draw(self, frame):
+        """在预览帧上画检测框，返回 (图像, 检测框列表)。
+
+        【性能关键】YOLO 推理在 CPU 上约 100~200ms/帧，每帧都跑会把 CPU 打满，
+        整个页面（按钮、面板、识别）都会跟着变卡。所以：
+        - 平时预览：每 DETECT_EVERY 帧才跑一次 YOLO，其余帧沿用上次的框；
+        - 录制中：每帧都跑，保证每个字母都被采到（这是识别准确性的前提）。
+        """
+        out = frame.copy()
+        if self._model is None:
+            return out, []
+
+        every = 1 if self.recording else DETECT_EVERY
+        self._fc = getattr(self, "_fc", 0) + 1
+        due = (self._fc % every == 0) or getattr(self, "_last_boxes", None) is None
+        if due:
+            try:
+                res = self._model(out, imgsz=DETECT_IMGSZ, conf=0.35, verbose=False)[0]
+                boxes = []
+                names = res.names
+                if res.boxes is not None:
+                    for b in res.boxes:
+                        x1, y1, x2, y2 = map(int, b.xyxy[0])
+                        boxes.append((x1, y1, x2, y2, float(b.conf), str(names[int(b.cls)]).upper()))
+                boxes.sort(key=lambda t: -t[4])
+                self._last_boxes = boxes
+            except Exception:
+                self._last_boxes = getattr(self, "_last_boxes", [])
+
+        boxes = getattr(self, "_last_boxes", [])
+        if boxes:
+            for x1, y1, x2, y2, c, label in boxes:
+                color = (34, 197, 94) if c >= 0.6 else (59, 130, 246)
+                cv2.rectangle(out, (x1, y1), (x2, y2), color, 2)
+                tag = f"{label} {c:.2f}"
+                cv2.rectangle(out, (x1, max(0, y1 - 22)), (x1 + 10 * len(tag), y1), color, -1)
+                cv2.putText(out, tag, (x1 + 4, max(14, y1 - 6)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
+        else:
+            cv2.putText(out, "No hand detected - move closer to camera", (14, 28),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (59, 130, 246), 2, cv2.LINE_AA)
+
+        # 录制中在画面顶部压一条录制指示
+        if self.recording:
+            el = time.time() - self.rec_started
+            cv2.rectangle(out, (0, 0), (out.shape[1], 34), (190, 18, 60), -1)
+            cv2.putText(out, f"REC  {el:4.1f}s   gesture now, click STOP when done",
+                        (12, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
+        return out, boxes
+
+    def start(self):
+        if self.running:
+            return
+        self.running = True
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+    def pause(self):
+        """识别前调用：停止抓帧并【释放设备】，否则识别流程打不开摄像头。
+        Windows 摄像头同一时刻只允许一个进程/句柄占用，这里必须先 release。"""
+        self.enabled = False
+        time.sleep(0.1)
+        with self.lock:
+            cap = self.cap
+            self.cap = None
+        if cap is not None:
+            try:
+                cap.release()
+            except Exception:
+                pass
+        time.sleep(0.25)      # 给驱动回收句柄留时间，否则紧接着 open 会失败
+
+    def resume(self):
+        self.enabled = True
+        self._open()          # 立即重新打开，恢复预览
+
+    def snapshot(self):
+        """给 gradio 定时器调用：返回最新一帧；不可用时返回带说明文字的占位图。
+
+        【性能】统一缩到 PREVIEW_W x PREVIEW_H 再返回。摄像头原生 1280x720 的图
+        每 0.3 秒走一次 gradio 的 base64 传输，会导致页面明显发滞；
+        缩到 760x480 后传输量降到约 1/3，肉眼看不出差别。
+        """
+        with self.lock:
+            frame = None if self.frame is None else self.frame.copy()
+            err = self.error
+        if frame is not None:
+            h, w = frame.shape[:2]
+            if w > PREVIEW_W:
+                nh = int(h * PREVIEW_W / w)
+                frame = cv2.resize(frame, (PREVIEW_W, nh), interpolation=cv2.INTER_AREA)
+            return frame
+        img = np.full((PREVIEW_H, PREVIEW_W, 3), (241, 245, 249), dtype=np.uint8)
+        msg = "正在连接摄像头..." if not err else "摄像头不可用"
+        cv2.rectangle(img, (0, 0), (PREVIEW_W, 38), (190, 18, 60) if err else (30, 64, 175), -1)
+        cv2.putText(img, f"CAMERA | {msg}", (18, 25), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6, (255, 255, 255), 1, cv2.LINE_AA)
+        if err:
+            for i, line in enumerate(_wrap_cn(err, 42)[:4]):
+                cv2.putText(img, line, (20, 90 + i * 34), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.62, (60, 60, 60), 1, cv2.LINE_AA)
+        return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+
+def _wrap_cn(text, width):
+    """按字符数硬折行（中文没有空格，不能用 textwrap）。"""
+    return [text[i:i + width] for i in range(0, len(text), width)]
+
+
+
+
+
+CAM_PREVIEW = CameraPreview()
+
+
+def render_preview_frame_a(mode_text="摄像头实时采集待命", active=False, token_info=None, conf_thresh=0.60, failed=False):
     """生成带科技蓝检测框或红色识别失败警示框的预览画面（760x480 固定大画幅）"""
     h, w = 480, 760
     img = np.full((h, w, 3), (241, 245, 249), dtype=np.uint8)
@@ -316,7 +552,7 @@ def build_vocab_bar_html():
     """
 
 
-def build_confidence_bars_a(tokens, conf_thresh=0.75, filtered_count=0, failed_reason=""):
+def build_confidence_bars_a(tokens, conf_thresh=0.60, filtered_count=0, failed_reason=""):
     if failed_reason:
         return f"""
         <div style="padding:12px 14px;background:#FFF1F2;border:1px solid #FECDD3;border-radius:8px;color:#881337;font-size:12.5px;">
@@ -490,11 +726,51 @@ def append_history_record(rec_type, words_str, translation, reply):
     _NEXT_RECORD_ID += 1
 
 
-def simulate_failure(conf_thresh=0.75, auto_tts_mode="🔊 自动朗读"):
-    """触发识别失败/低置信度四联动告警状态"""
+def _hardware_fail(conf_thresh=0.60, auto_tts_mode="🔊 自动朗读", err=""):
+    """摄像头/权重等硬故障的界面反馈：与普通识别失败区分开，直接显示真实原因。"""
     global _CURRENT_TOKENS
     _CURRENT_TOKENS = []
-    reason = f"检测到手部动作置信度过低（最高仅 0.41，低于过滤阈值 {conf_thresh:.2f}），或手部偏离采集区域、动作模糊，未能匹配有效政务手语词。"
+    frame = render_preview_frame_a(f"CAMERA ERROR | {err[:52]}", active=False, conf_thresh=conf_thresh, failed=True)
+    reason = f"⚠️ 系统故障（非手语问题）：{err}"
+    conf_html = build_confidence_bars_a([], conf_thresh, 0, failed_reason=reason)
+    word_text = "⚠️ 系统故障：请看右侧红色提示中的具体原因"
+    large_html = build_large_translation_html("", "", failed=True)
+    is_auto = "自动" in str(auto_tts_mode)
+    msg = f"摄像头/系统故障：{err}" + ("（已尝试自动播报提示）" if is_auto else "（静音模式）")
+    status_html = build_status_pill_a("error", msg, auto_tts_mode)
+    return frame, conf_html, word_text, "系统出现故障，请工作人员检查摄像头。", large_html, status_html, build_history_html(_HISTORY_RECORDS)
+
+
+def simulate_failure(conf_thresh=0.60, auto_tts_mode="🔊 自动朗读", diag=None):
+    """触发识别失败/低置信度四联动告警状态。diag 为采集诊断信息，用于定位卡在哪一步。"""
+    global _CURRENT_TOKENS
+    _CURRENT_TOKENS = []
+
+    # 根据诊断数据判断失败发生在哪一层，给出可直接执行的建议
+    tip = ""
+    if diag:
+        frames = diag.get("frames", 0)
+        sampled = diag.get("sampled", 0)
+        detected = diag.get("detected", 0)
+        max_conf = diag.get("max_conf", 0.0)
+        letters = diag.get("letters") or []
+        secs = diag.get("seconds", 0)
+        if frames == 0:
+            tip = f"⚠️ 摄像头打开了，但 {secs}s 内一帧画面都没读到（设备被占用或驱动异常）。"
+        elif detected == 0:
+            tip = (f"⚠️ 采集 {secs}s / {frames} 帧，其中 {sampled} 帧送检，"
+                   f"但**一帧都没检出人手**。请把手抬到画面中央、距离镜头 40~60cm，"
+                   f"让整只手占画面 1/3 以上，再点开始识别。")
+        elif not letters:
+            tip = (f"⚠️ 采集 {frames} 帧，检出手 {detected} 帧，但字母没稳定出来"
+                   f"（最高置信度 {max_conf:.2f} < {CLS_MIN_CONF_DISPLAY}）。"
+                   f"请把手掌正对镜头、保持姿势 1 秒不要动。")
+        else:
+            tip = (f"⚠️ 识别到字母 {''.join(str(x).upper() for x in letters)}，"
+                   f"但拼不成词库里的词（均值 {max_conf:.2f}）。"
+                   f"请放慢速度，每个字母之间手离开画面停 0.5 秒。")
+
+    reason = tip or "未能匹配有效政务手语词，请正对摄像头重新比划。"
     frame = render_preview_frame_a("WARNING | 识别失败请重试", active=False, conf_thresh=conf_thresh, failed=True)
     conf_html = build_confidence_bars_a([], conf_thresh, 0, failed_reason=reason)
     word_text = "⚠️ 识别失败：未检出有效手语词序列（请重新比划）"
@@ -510,67 +786,131 @@ def simulate_failure(conf_thresh=0.75, auto_tts_mode="🔊 自动朗读"):
     return frame, conf_html, word_text, fail_tts, large_html, status_html, build_history_html(_HISTORY_RECORDS)
 
 
-def start(source_type, video_file, conf_thresh=0.75, auto_tts_mode="🔊 自动朗读"):
-    """核心回调 1：点击【▶ 开始识别】调用 vision_engine 与 agent"""
+def start(source_type, video_file, conf_thresh=0.60, auto_tts_mode="🔊 自动朗读"):
+    """点击【▶ 开始识别】：进入录制状态，由用户自己决定何时停止。
+
+    【流程改动原因】
+    旧版点完就开始采样、3.5 秒一到立刻结算，用户还没抬起手就判定"识别失败"，
+    体验极差且必然失败。现在改成：
+      点开始 → 一直录（画面顶部显示 REC 计时）→ 用户比完自己点【停止识别】→ 结算
+    这样节奏完全由使用者掌握，不再有"时限压力"。
+    """
+    global _CURRENT_TOKENS
+
+    print(f"\n{'='*50}\n[record] << 收到【开始识别】点击 >> source={source_type}\n{'='*50}", flush=True)
+
+    if "视频" in str(source_type) and video_file:
+        # 上传视频模式没有实时录制概念，一次性识别后直接结算
+        res = _recognize_from_file(video_file, conf_thresh, auto_tts_mode)
+        return res  # 7 元组，与 btn_start 的输出一一对应
+
+    if not CAM_PREVIEW.running or not CAM_PREVIEW.enabled:
+        return (gr.update(), gr.update(), gr.update(), gr.update(),
+                build_status_pill_a("error", "摄像头未就绪：请确认摄像头已连接、未被其它程序占用"),
+                gr.update(), gr.update())
+
+    CAM_PREVIEW.rec_begin()
+    _CURRENT_TOKENS = []
+    status_html = build_status_pill_a(
+        "running", "🔴 正在录制：请开始比划手语，比完后点击【⏸ 停止识别】出结果", auto_tts_mode
+    )
+    return (gr.update(), gr.update(), gr.update(), gr.update(), status_html, gr.update(), gr.update())
+
+
+def stop(conf_thresh=0.60, auto_tts_mode="🔊 自动朗读"):
+    """点击【⏸ 停止识别】：结束录制并结算识别结果。"""
     global _CURRENT_TOKENS, _CURRENT_SCENE
 
-    if HAS_VISION_ENGINE and hasattr(vision_engine, "predict_sign_tokens"):
-        custom_frame, all_tokens, scene = vision_engine.predict_sign_tokens(source_type, video_file, conf_thresh)
-    else:
-        custom_frame = None
-        all_tokens = [
-            {"word": "你好", "conf": 0.98, "bbox": (190, 110, 390, 340)},
-            {"word": "身份证", "conf": 0.96, "bbox": (205, 115, 405, 345)},
-            {"word": "补办", "conf": 0.95, "bbox": (200, 112, 415, 350)},
-        ]
-        scene = _CURRENT_SCENE
+    if not CAM_PREVIEW.recording:
+        return (gr.update(), gr.update(), gr.update(), gr.update(),
+                build_status_pill_a("paused", "当前没有正在进行的录制，请先点击【▶ 开始识别】"),
+                gr.update(), gr.update())
 
-    _CURRENT_SCENE = scene
+    stream, confs, diag = CAM_PREVIEW.rec_end()
+    if not stream:
+        return simulate_failure(conf_thresh, auto_tts_mode,
+                                diag={"frames": 0, "sampled": 0, "detected": 0,
+                                      "max_conf": 0.0, "letters": [], "seconds": 0})
 
-    # 记录本轮是否为模拟数据（vision_engine 在回退时会在 scene 里打标），
-    # 供状态栏统一渲染告警横幅。
-    _MOCK_STATE["is_mock"] = bool(scene.get("is_mock"))
-    _MOCK_STATE["reason"] = scene.get("is_mock_reason") or ""
+    import sign_real_link as _srl
+    letters, lconfs = _srl.compress_runs(stream, confs)
+    words = _srl.spell_letters(letters, _srl.load_pinyin_targets())
+
+    detected = sum(1 for x in stream if x is not None)
+    diag.update({
+        "sampled": len(stream),
+        "detected": detected,
+        "letters": letters,
+        "max_conf": float(max(confs)) if confs else 0.0,
+    })
+
+    if not words:
+        return simulate_failure(conf_thresh, auto_tts_mode, diag=diag)
+
+    # 置信度用该字母段的平均分，而不是全局最大值，避免一个高分带整体过关
+    conf_map = {}
+    for w in words:
+        idx = [i for i, l in enumerate(letters) if l and l.lower() in w.lower()]
+        seg = [lconfs[i] for i in idx if i < len(lconfs)] or lconfs or [0.5]
+        conf_map[w] = float(min(0.99, sum(seg) / len(seg)))
+
+    bbox = diag.get("last_box")
+    bbox = (bbox[0], bbox[1], bbox[2], bbox[3]) if bbox else (190, 110, 390, 340)
+    all_tokens = [{"word": w, "conf": conf_map.get(w, 0.5), "bbox": bbox} for w in words]
 
     valid_tokens = [t for t in all_tokens if t["conf"] >= conf_thresh]
     if not valid_tokens:
-        return simulate_failure(conf_thresh, auto_tts_mode)
+        return simulate_failure(conf_thresh, auto_tts_mode, diag=diag)
 
-    filtered_cnt = len(all_tokens) - len(valid_tokens)
     _CURRENT_TOKENS = list(valid_tokens)
+    scene = {"scene_name": "字母拼写实时识别", "letters": letters,
+             "translation": "", "ai_answer": ""}
+    _CURRENT_SCENE = scene
 
     word_list = [t["word"] for t in _CURRENT_TOKENS]
-    source_desc = "本机摄像头实时流" if "摄像头" in str(source_type) else "本地视频文件"
-
-    frame = (
-        custom_frame
-        if custom_frame is not None
-        else render_preview_frame_a(
-            f"ACTIVE | {source_desc}", active=True, token_info=_CURRENT_TOKENS[-1], conf_thresh=conf_thresh
-        )
-    )
-    conf_html = build_confidence_bars_a(_CURRENT_TOKENS, conf_thresh, filtered_cnt)
+    conf_html = build_confidence_bars_a(_CURRENT_TOKENS, conf_thresh, len(all_tokens) - len(valid_tokens))
     word_text = _display_token_seq(_CURRENT_TOKENS)
-
     translation, ai_answer = call_agent_semantic_parser(word_list, scene)
     combined_text = f"{translation} {ai_answer}" if FEATURE_FLAGS["SHOW_AI_GOV_ANSWER"] else translation
     large_html = build_large_translation_html(translation, ai_answer)
-
     append_history_record("手语识别", _display_seq(word_list), translation, ai_answer)
     hist_html = build_history_html(_HISTORY_RECORDS)
 
     is_auto = "自动" in str(auto_tts_mode)
-    tts_note = "并已触发自动语音朗读" if is_auto else "（当前为🔇静音模式，未自动播报）"
+    tts_note = "，已自动语音播报" if is_auto else "（🔇静音模式）"
     status_html = build_status_pill_a(
         "running",
-        f"已完成【{scene.get('scene_name', '政务导办')}】手部检测与去重，识别出 {len(_CURRENT_TOKENS)} 个有效手语词{tts_note}",
+        f"识别完成：录了 {diag['seconds']}s / {diag['frames']} 帧，"
+        f"字母 {'-'.join(str(x).upper() for x in letters)} → {len(_CURRENT_TOKENS)} 个词{tts_note}",
         auto_tts_mode,
     )
-    return frame, conf_html, word_text, combined_text, large_html, status_html, hist_html
+    return gr.update(), conf_html, word_text, combined_text, large_html, status_html, hist_html
 
 
-def stop():
-    return build_status_pill_a("paused", "视频帧采集与 YOLO26 推理进程已暂停，当前识别结果已保留")
+def _recognize_from_file(video_file, conf_thresh, auto_tts_mode):
+    """上传视频模式：一次性识别（保留原逻辑）。"""
+    global _CURRENT_TOKENS, _CURRENT_SCENE
+    try:
+        custom_frame, all_tokens, scene = vision_engine.predict_sign_tokens(
+            "上传本地视频文件", video_file, conf_thresh)
+    except Exception as exc:
+        err = str(exc).strip().splitlines()[0] if str(exc).strip() else "未知错误"
+        return _hardware_fail(conf_thresh, auto_tts_mode, err)
+
+    _CURRENT_SCENE = scene
+    valid_tokens = [t for t in all_tokens if t["conf"] >= conf_thresh]
+    if not valid_tokens:
+        return simulate_failure(conf_thresh, auto_tts_mode, diag=scene.get("diag"))
+    _CURRENT_TOKENS = list(valid_tokens)
+    word_list = [t["word"] for t in _CURRENT_TOKENS]
+    conf_html = build_confidence_bars_a(_CURRENT_TOKENS, conf_thresh, len(all_tokens) - len(valid_tokens))
+    word_text = _display_token_seq(_CURRENT_TOKENS)
+    translation, ai_answer = call_agent_semantic_parser(word_list, scene)
+    combined_text = f"{translation} {ai_answer}" if FEATURE_FLAGS["SHOW_AI_GOV_ANSWER"] else translation
+    large_html = build_large_translation_html(translation, ai_answer)
+    append_history_record("手语识别", _display_seq(word_list), translation, ai_answer)
+    status_html = build_status_pill_a("running", "已完成视频文件识别", auto_tts_mode)
+    return gr.update(), conf_html, word_text, combined_text, large_html, status_html, build_history_html(_HISTORY_RECORDS)
 
 
 def tts(agent_text):
@@ -782,7 +1122,7 @@ body, .gradio-container { background: #F8FAFC !important; }
 }
 """
 
-blocks_kwargs = {"title": "YOLO26 静态手语词识别智能体 - 政务服务专版(方案A)"}
+blocks_kwargs = {"title": "手语视界—基于YOLO26的政务服务无障碍智能体"}
 try:
     if int(gr.__version__.split(".")[0]) < 5:
         blocks_kwargs["css"] = CUSTOM_CSS_A
@@ -800,7 +1140,10 @@ with gr.Blocks(**blocks_kwargs) as demo:
 
     gr.HTML("""
     <div class="header-banner-a">
-        <h1>YOLO26 静态手语词识别智能体 · 政务服务无障碍导办系统</h1>
+        <h1>手语视界—基于YOLO26的政务服务无障碍智能体
+            <span style="font-size:13px;background:#F59E0B;color:#fff;padding:3px 9px;
+                         border-radius:6px;vertical-align:middle;margin-left:10px;">录制版 V13</span>
+        </h1>
         <p>系统链路：摄像头/本地视频输入 → YOLO26 手部检测与去重 → 静态手语词识别 → Agent 语义翻译与政务导办应答 → 双向交互与语音朗读</p>
     </div>
     """)
@@ -824,11 +1167,11 @@ with gr.Blocks(**blocks_kwargs) as demo:
                         scale=5,
                     )
                     conf_slider = gr.Slider(
-                        minimum=0.50,
+                        minimum=0.40,
                         maximum=0.95,
-                        value=0.75,
+                        value=0.60,
                         step=0.05,
-                        label="置信度过滤阈值（默认 0.75）",
+                        label="置信度过滤阈值（默认 0.60，单级 YOLO 实测均值约 0.67）",
                         visible=FEATURE_FLAGS["SHOW_CONF_SLIDER"],
                         scale=4,
                     )
@@ -849,13 +1192,14 @@ with gr.Blocks(**blocks_kwargs) as demo:
                 # 所以标签关掉、改用上方独立标题行。
                 gr.HTML(
                     "<div style='font-size:12.5px;font-weight:700;color:#334155;"
-                    "padding:2px 0 4px 2px;'>📹 视频预览与 YOLO26 手部检测框展示（固定大画幅）</div>"
+                    "padding:2px 0 4px 2px;'>📹 实时摄像头预览（画面中的绿框/蓝框 = YOLO26 检出的手与字母）</div>"
                 )
                 preview_image = gr.Image(
-                    value=render_preview_frame_a("摄像头实时采集待命", active=False),
+                    value=CAM_PREVIEW.snapshot(),
                     show_label=False,
                     interactive=False,
                     height=480,
+                    elem_id="live-preview-a",
                 )
                 with gr.Row():
                     btn_start = gr.Button("▶ 开始识别", variant="primary")
@@ -911,9 +1255,25 @@ with gr.Blocks(**blocks_kwargs) as demo:
         outputs=[video_input, preview_image, status_display],
     )
 
+    # 【开始识别】只负责进入录制状态，不结算；节奏交给用户
     btn_start.click(
         fn=start,
         inputs=[source_selector, video_input, conf_slider, auto_tts_radio],
+        outputs=[
+            preview_image,
+            conf_bars_output,
+            word_seq_output,
+            agent_tts_holder,
+            large_agent_html,
+            status_display,
+            history_html_box,
+        ],
+    )
+
+    # 【停止识别】才真正结算结果
+    btn_stop.click(
+        fn=stop,
+        inputs=[conf_slider, auto_tts_radio],
         outputs=[
             preview_image,
             conf_bars_output,
@@ -1053,9 +1413,35 @@ with gr.Blocks(**blocks_kwargs) as demo:
         fn=clear_all_history, inputs=[], outputs=[history_html_box, status_display]
     )
 
-if __name__ == "__main__":
-    launch_sig = inspect.signature(demo.launch)
-    if "css" in launch_sig.parameters:
-        demo.launch(css=CUSTOM_CSS_A)
+    # ------------------------------------------------------------------
+    # 实时预览推送（按 gradio 版本自动选择，逐级降级）：
+    #   1) gradio 6：gr.Timer 每 0.5s 触发一次 tick，把新帧写进 Image 组件
+    #   2) gradio 4/5：demo.load(every=0.2) 轮询
+    #   3) 兜底：前端脚本直接换 <img> 的 src（拉 /preview_frame）
+    # 任一层生效即可看到画面；上机后可按黑窗口日志判断实际走了哪层。
+    # ------------------------------------------------------------------
+    def _tick_preview():
+        return CAM_PREVIEW.snapshot()
+
+    if hasattr(gr, "Timer"):
+        preview_timer = gr.Timer(0.2)
+        preview_timer.tick(fn=_tick_preview, inputs=None, outputs=preview_image)
+        print("[preview] 预览刷新方式：gr.Timer(0.2s)", flush=True)
     else:
-        demo.launch()
+        demo.load(fn=_tick_preview, inputs=None, outputs=preview_image, every=0.2)
+        print("[preview] 预览刷新方式：demo.load(every=0.2)", flush=True)
+
+if __name__ == "__main__":
+    print("=" * 60, flush=True)
+    print("  手语视界 · 录制版 V13", flush=True)
+    print("  看到这行 = 新代码已生效。若没看到，跑的是旧文件/旧进程。", flush=True)
+    print("=" * 60, flush=True)
+
+    CAM_PREVIEW.start()
+    print("[preview] 摄像头预览线程已启动（若 5 秒内无'实时预览已启动'说明没找到设备）", flush=True)
+
+    launch_sig = inspect.signature(demo.launch)
+    kwargs = {}
+    if "css" in launch_sig.parameters:
+        kwargs["css"] = CUSTOM_CSS_A
+    demo.launch(**kwargs)
